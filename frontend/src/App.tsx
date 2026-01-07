@@ -70,6 +70,15 @@ const formatMinutes = (minutes: number) => {
 const toLpuLabel = (start: number, end: number) =>
   `${formatMinutes(start)} - ${formatMinutes(end)}`;
 
+const overlap = (startA: number, endA: number, startB: number, endB: number) =>
+  startA < endB && startB < endA;
+
+const splitDays = (days: string) =>
+  days
+    .split(",")
+    .map((day) => day.trim())
+    .filter(Boolean);
+
 const parseTimeRange = (range: string) => {
   const [start, end] = range.split("-");
   const toMinutes = (time: string) => {
@@ -124,6 +133,9 @@ export default function App() {
   const [newSection, setNewSection] = useState("");
   const [newFaculty, setNewFaculty] = useState("");
   const [newRoom, setNewRoom] = useState("");
+  const [formError, setFormError] = useState("");
+  const [editEntryId, setEditEntryId] = useState<number | null>(null);
+  const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
 
   const refreshAll = async () => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes, conflictsRes] =
@@ -217,6 +229,20 @@ export default function App() {
   };
 
   const handleCreateSchedule = async () => {
+    const requiredFields: Array<keyof ScheduleEntry> = [
+      "Section",
+      "Course Code",
+      "Room",
+      "Faculty",
+      "Days",
+      "Time (24 Hrs)",
+    ];
+    const missing = requiredFields.filter((field) => !scheduleForm[field]);
+    if (missing.length > 0) {
+      setFormError(`Missing required fields: ${missing.join(", ")}`);
+      return;
+    }
+    setFormError("");
     const payload = {
       ...scheduleForm,
       "Time (LPU Std)":
@@ -232,6 +258,33 @@ export default function App() {
       "Course Code": "",
       "Course Description": "",
     }));
+    refreshAll();
+  };
+
+  const handleEdit = (entry: ScheduleEntry) => {
+    setEditEntryId(entry.id);
+    setEditEntry({ ...entry });
+  };
+
+  const handleCancelEdit = () => {
+    setEditEntryId(null);
+    setEditEntry(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editEntry || editEntryId === null) return;
+    await fetch(`${API_BASE}/schedule/${editEntryId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editEntry),
+    });
+    setEditEntryId(null);
+    setEditEntry(null);
+    refreshAll();
+  };
+
+  const handleDeleteEntry = async (entryId: number) => {
+    await fetch(`${API_BASE}/schedule/${entryId}`, { method: "DELETE" });
     refreshAll();
   };
 
@@ -251,6 +304,8 @@ export default function App() {
   };
 
   const handleReset = async () => {
+    const confirmed = window.confirm("This will clear the current timetable. Continue?");
+    if (!confirmed) return;
     await fetch(`${API_BASE}/file/reset`, { method: "POST" });
     refreshAll();
   };
@@ -305,6 +360,53 @@ export default function App() {
     return entries;
   }, [entries, exportFilter, viewMode]);
 
+  const timetableGroup = viewMode.startsWith("timetable")
+    ? viewMode.split("-")[1]
+    : "class";
+
+  const exportOptions =
+    viewMode === "timetable-class"
+      ? sections
+      : viewMode === "timetable-faculty"
+        ? faculty
+        : viewMode === "timetable-room"
+          ? rooms
+          : [];
+
+  const conflictDetails = useMemo(() => {
+    const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
+    return conflicts.conflicts.flatMap((conflict) => {
+      const entry = entryMap.get(conflict.entry_id);
+      if (!entry) return [];
+      return conflict.conflicts_with.map((otherId) => {
+        const other = entryMap.get(otherId);
+        if (!other) return null;
+        const entryDays = splitDays(entry.Days);
+        const otherDays = splitDays(other.Days);
+        const sharedDays = entryDays.filter((day) => otherDays.includes(day));
+        const entryTime = parseTimeRange(entry["Time (24 Hrs)"]);
+        const otherTime = parseTimeRange(other["Time (24 Hrs)"]);
+        const hasOverlap = overlap(
+          entryTime.start,
+          entryTime.end,
+          otherTime.start,
+          otherTime.end
+        );
+        const overlapStart = Math.max(entryTime.start, otherTime.start);
+        const overlapEnd = Math.min(entryTime.end, otherTime.end);
+        return {
+          type: conflict.conflict_type,
+          entry,
+          other,
+          sharedDays,
+          overlapTime: hasOverlap
+            ? `${formatMinutes(overlapStart)}-${formatMinutes(overlapEnd)}`
+            : "No overlap",
+        };
+      });
+    }).filter(Boolean);
+  }, [conflicts, entries]);
+
   return (
     <div className="app">
       <div className="ribbon">
@@ -340,14 +442,14 @@ export default function App() {
           </button>
           <button
             onClick={() =>
-              handleExport(`/reports/timetable/${viewMode.split("-")[1]}.csv`, "timetable.csv")
+              handleExport(`/reports/timetable/${timetableGroup}.csv`, "timetable.csv")
             }
           >
             Export Timetable View
           </button>
           <button
             onClick={() =>
-              handleExport(`/reports/timetable/${viewMode.split("-")[1]}.xlsx`, "timetable.xlsx")
+              handleExport(`/reports/timetable/${timetableGroup}.xlsx`, "timetable.xlsx")
             }
           >
             Export Timetable View (.xlsx)
@@ -379,15 +481,14 @@ export default function App() {
               <select
                 value={exportFilter}
                 onChange={(event) => setExportFilter(event.target.value)}
+                disabled={!viewMode.startsWith("timetable")}
               >
                 <option value="">All</option>
-                {(viewMode === "timetable-class" ? sections : viewMode === "timetable-faculty" ? faculty : rooms).map(
-                  (item) => (
-                    <option key={item.id} value={item.name}>
-                      {item.name}
-                    </option>
-                  )
-                )}
+                {exportOptions.map((item) => (
+                  <option key={item.id} value={item.name}>
+                    {item.name}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
@@ -420,14 +521,45 @@ export default function App() {
                         {header}
                       </th>
                     ))}
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredEntries.map((entry) => (
                     <tr key={entry.id} className={conflictSet.has(entry.id) ? "conflict" : ""}>
                       {canonicalHeaders.map((header) => (
-                        <td key={header}>{entry[header]}</td>
+                        <td key={header}>
+                          {editEntryId === entry.id && editEntry ? (
+                            <input
+                              value={String(editEntry[header])}
+                              onChange={(event) =>
+                                setEditEntry({
+                                  ...editEntry,
+                                  [header]:
+                                    header === "Units" || header === "# of Hours"
+                                      ? Number(event.target.value)
+                                      : event.target.value,
+                                } as ScheduleEntry)
+                              }
+                            />
+                          ) : (
+                            entry[header]
+                          )}
+                        </td>
                       ))}
+                      <td>
+                        {editEntryId === entry.id ? (
+                          <>
+                            <button onClick={handleSaveEdit}>Save</button>
+                            <button onClick={handleCancelEdit}>Cancel</button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => handleEdit(entry)}>Edit</button>
+                            <button onClick={() => handleDeleteEntry(entry.id)}>Delete</button>
+                          </>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -664,6 +796,7 @@ export default function App() {
             </datalist>
           </label>
           <button onClick={handleCreateSchedule}>Add Class</button>
+          {formError && <p className="error">{formError}</p>}
 
           <h3>Add Section</h3>
           <label>
@@ -709,6 +842,21 @@ export default function App() {
           >
             Add Room
           </button>
+          <h3>Conflicts</h3>
+          {conflictDetails.length === 0 ? (
+            <p className="muted">No conflicts detected.</p>
+          ) : (
+            <ul className="conflict-list">
+              {conflictDetails.map((conflict, index) => (
+                <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
+                  <strong>{conflict?.type.toUpperCase()}</strong>: {conflict?.entry["Course Code"]}{" "}
+                  ({conflict?.entry.Section}) vs {conflict?.other["Course Code"]} (
+                  {conflict?.other.Section}) on {conflict?.sharedDays.join(", ")} at{" "}
+                  {conflict?.overlapTime}
+                </li>
+              ))}
+            </ul>
+          )}
         </aside>
       </div>
     </div>

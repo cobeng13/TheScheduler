@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 from typing import List
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -230,7 +229,7 @@ def export_timetable_xlsx(group: str, filter_value: str | None = None, db: Sessi
         for entry in crud.list_schedule_entries(db)
     ]
     entries = filter_entries(entries, group, filter_value)
-    rows = reports.build_text_rows(entries)
+    rows = reports.build_timetable_grid(entries)
     content = reports.write_xlsx(rows, title=f"Timetable {group.title()}")
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

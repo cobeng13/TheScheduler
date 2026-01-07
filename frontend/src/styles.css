@@ -106,6 +106,24 @@ body {
   white-space: nowrap;
 }
 
+.text-view td input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #cbd4e2;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.text-view td button {
+  margin-right: 6px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  border: 1px solid #cbd4e2;
+  background: #fff;
+  cursor: pointer;
+}
+
 .text-view th {
   background: #f0f4fa;
   cursor: pointer;
@@ -243,4 +261,26 @@ body {
 
 .panel button:hover {
   background: #244b83;
+}
+
+.error {
+  color: #c0392b;
+  font-size: 0.85rem;
+}
+
+.muted {
+  color: #5b6b85;
+  font-size: 0.85rem;
+}
+
+.conflict-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  font-size: 0.8rem;
+}
+
+.conflict-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid #e1e6ef;
 }
