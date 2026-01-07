@@ -33,8 +33,20 @@ def get_db():
 
 
 @app.get("/schedule", response_model=List[schemas.ScheduleEntry])
-def list_schedule(db: Session = Depends(get_db)):
-    return crud.list_schedule_entries(db)
+def list_schedule(
+    section: str | None = None,
+    faculty: str | None = None,
+    room: str | None = None,
+    db: Session = Depends(get_db),
+):
+    entries = crud.list_schedule_entries(db)
+    if section:
+        entries = [entry for entry in entries if entry.section == section]
+    if faculty:
+        entries = [entry for entry in entries if entry.faculty == faculty]
+    if room:
+        entries = [entry for entry in entries if entry.room == room]
+    return entries
 
 
 @app.get("/schedule/{entry_id}", response_model=schemas.ScheduleEntry)

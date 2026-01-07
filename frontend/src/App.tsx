@@ -129,6 +129,9 @@ const downloadBlob = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
+const sortEntities = (items: NamedEntity[]) =>
+  [...items].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
 export default function App() {
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [sections, setSections] = useState<NamedEntity[]>([]);
@@ -147,7 +150,10 @@ export default function App() {
     "Course Code"
   );
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
-  const [exportFilter, setExportFilter] = useState("");
+  const [selectedSection, setSelectedSection] = useState("");
+  const [selectedFaculty, setSelectedFaculty] = useState("");
+  const [selectedRoom, setSelectedRoom] = useState("");
+  const [timetableEntries, setTimetableEntries] = useState<ScheduleEntry[]>([]);
   const [scheduleForm, setScheduleForm] = useState<ScheduleEntry>({
     id: 0,
     "Program": "",
@@ -190,6 +196,85 @@ export default function App() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  const sectionOptions = useMemo(() => sortEntities(sections), [sections]);
+  const facultyOptions = useMemo(() => sortEntities(faculty), [faculty]);
+  const roomOptions = useMemo(() => sortEntities(rooms), [rooms]);
+
+  const currentViewConfig = useMemo(() => {
+    if (viewMode === "timetable-section") {
+      return {
+        label: "sections",
+        entities: sectionOptions,
+        selected: selectedSection,
+        setSelected: setSelectedSection,
+      };
+    }
+    if (viewMode === "timetable-faculty") {
+      return {
+        label: "faculty",
+        entities: facultyOptions,
+        selected: selectedFaculty,
+        setSelected: setSelectedFaculty,
+      };
+    }
+    if (viewMode === "timetable-room") {
+      return {
+        label: "rooms",
+        entities: roomOptions,
+        selected: selectedRoom,
+        setSelected: setSelectedRoom,
+      };
+    }
+    return {
+      label: "",
+      entities: [],
+      selected: "",
+      setSelected: () => {},
+    };
+  }, [
+    viewMode,
+    sectionOptions,
+    facultyOptions,
+    roomOptions,
+    selectedSection,
+    selectedFaculty,
+    selectedRoom,
+  ]);
+
+  useEffect(() => {
+    if (!viewMode.startsWith("timetable")) {
+      return;
+    }
+    if (currentViewConfig.entities.length === 0) {
+      setTimetableEntries([]);
+      return;
+    }
+    if (!currentViewConfig.selected) {
+      currentViewConfig.setSelected(currentViewConfig.entities[0].name);
+    }
+  }, [viewMode, currentViewConfig]);
+
+  useEffect(() => {
+    if (!viewMode.startsWith("timetable")) {
+      return;
+    }
+    if (!currentViewConfig.selected) {
+      setTimetableEntries([]);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (viewMode === "timetable-section") {
+      params.set("section", currentViewConfig.selected);
+    } else if (viewMode === "timetable-faculty") {
+      params.set("faculty", currentViewConfig.selected);
+    } else if (viewMode === "timetable-room") {
+      params.set("room", currentViewConfig.selected);
+    }
+    fetch(`${API_BASE}/schedule?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => setTimetableEntries(data));
+  }, [viewMode, currentViewConfig.selected]);
 
   const conflictSet = useMemo(() => {
     const set = new Set<number>();
@@ -359,9 +444,12 @@ export default function App() {
     const confirmed = window.confirm("This will clear the current timetable. Continue?");
     if (!confirmed) return;
     await fetch(`${API_BASE}/file/reset`, { method: "POST" });
-    setExportFilter("");
     setSelection(null);
     setContextMenu(null);
+    setSelectedSection("");
+    setSelectedFaculty("");
+    setSelectedRoom("");
+    setTimetableEntries([]);
     setScheduleForm({
       id: 0,
       "Program": "",
@@ -416,31 +504,15 @@ export default function App() {
     return sorted;
   }, [entries, filterText, sortKey, sortDirection]);
 
-  const timetableEntries = useMemo(() => {
-    if (viewMode === "timetable-section" && exportFilter) {
-      return entries.filter((entry) => entry.Section === exportFilter);
-    }
-    if (viewMode === "timetable-faculty" && exportFilter) {
-      return entries.filter((entry) => entry.Faculty === exportFilter);
-    }
-    if (viewMode === "timetable-room" && exportFilter) {
-      return entries.filter((entry) => entry.Room === exportFilter);
-    }
-    return entries;
-  }, [entries, exportFilter, viewMode]);
-
   const timetableGroup = viewMode.startsWith("timetable")
     ? viewMode.split("-")[1]
     : "section";
 
-  const exportOptions =
-    viewMode === "timetable-section"
-      ? sections
-      : viewMode === "timetable-faculty"
-        ? faculty
-        : viewMode === "timetable-room"
-          ? rooms
-          : [];
+  const isTimetableView = viewMode.startsWith("timetable");
+  const effectiveSelection =
+    currentViewConfig.selected || currentViewConfig.entities[0]?.name || "";
+  const canExportTimetable =
+    isTimetableView && Boolean(effectiveSelection) && currentViewConfig.entities.length > 0;
 
   const conflictDetails = useMemo(() => {
     const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
@@ -476,6 +548,27 @@ export default function App() {
     }).filter(Boolean);
   }, [conflicts, entries]);
 
+  const currentIndex = useMemo(
+    () =>
+      currentViewConfig.entities.findIndex((entity) => entity.name === effectiveSelection),
+    [currentViewConfig, effectiveSelection]
+  );
+  const hasMultipleEntities = currentViewConfig.entities.length > 1;
+
+  const handlePrevEntity = () => {
+    if (!hasMultipleEntities) return;
+    const nextIndex =
+      currentIndex <= 0 ? currentViewConfig.entities.length - 1 : currentIndex - 1;
+    currentViewConfig.setSelected(currentViewConfig.entities[nextIndex].name);
+  };
+
+  const handleNextEntity = () => {
+    if (!hasMultipleEntities) return;
+    const nextIndex =
+      currentIndex >= currentViewConfig.entities.length - 1 ? 0 : currentIndex + 1;
+    currentViewConfig.setSelected(currentViewConfig.entities[nextIndex].name);
+  };
+
   return (
     <div className="app">
       <div className="ribbon">
@@ -509,13 +602,29 @@ export default function App() {
           <button onClick={() => handleExport("/reports/text.xlsx", "text-view.xlsx")}>
             Export Text View (.xlsx)
           </button>
-          <button onClick={() => handleExport(`/reports/timetable/${timetableGroup}.csv`, "timetable.csv")}>
+          <button
+            onClick={() =>
+              handleExport(
+                `/reports/timetable/${timetableGroup}.csv?filter_value=${encodeURIComponent(
+                  effectiveSelection
+                )}`,
+                "timetable.csv"
+              )
+            }
+            disabled={!canExportTimetable}
+          >
             Export Timetable View
           </button>
           <button
             onClick={() =>
-              handleExport(`/reports/timetable/${timetableGroup}.xlsx`, "timetable.xlsx")
+              handleExport(
+                `/reports/timetable/${timetableGroup}.xlsx?filter_value=${encodeURIComponent(
+                  effectiveSelection
+                )}`,
+                "timetable.xlsx"
+              )
             }
+            disabled={!canExportTimetable}
           >
             Export Timetable View (.xlsx)
           </button>
@@ -540,21 +649,6 @@ export default function App() {
                 checked={useQuarterHours}
                 onChange={(event) => setUseQuarterHours(event.target.checked)}
               />
-            </label>
-            <label>
-              Export filter
-              <select
-                value={exportFilter}
-                onChange={(event) => setExportFilter(event.target.value)}
-                disabled={!viewMode.startsWith("timetable")}
-              >
-                <option value="">All</option>
-                {exportOptions.map((item) => (
-                  <option key={item.id} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
             </label>
           </div>
 
@@ -653,88 +747,128 @@ export default function App() {
             </div>
           ) : (
             <div className="timetable" onContextMenu={handleContextMenu} onMouseUp={() => setIsSelecting(false)}>
-              {viewMode === "timetable-section" && (
-                <div className="timetable-title">
-                  {exportFilter ? `Section: ${exportFilter}` : "All Sections"}
+              <div className="timetable-header">
+                <div className="timetable-header-left">
+                  <button
+                    className="nav-button"
+                    onClick={handlePrevEntity}
+                    disabled={!hasMultipleEntities}
+                  >
+                    ◀
+                  </button>
+                  <select
+                    value={effectiveSelection}
+                    onChange={(event) => currentViewConfig.setSelected(event.target.value)}
+                    disabled={currentViewConfig.entities.length === 0}
+                  >
+                    {currentViewConfig.entities.map((entity) => (
+                      <option key={entity.id} value={entity.name}>
+                        {entity.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
-              <div
-                className="day-headers"
-                style={{
-                  gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
-                }}
-              >
-                <div className="time-header">Time</div>
-                {visibleDays.map((day) => (
-                  <div key={day} className="day-header">
-                    {day}
-                  </div>
-                ))}
+                <div className="timetable-title">
+                  {effectiveSelection ||
+                    (currentViewConfig.label ? `No ${currentViewConfig.label} yet` : "")}
+                </div>
+                <div className="timetable-header-right">
+                  <button
+                    className="nav-button"
+                    onClick={handleNextEntity}
+                    disabled={!hasMultipleEntities}
+                  >
+                    ▶
+                  </button>
+                </div>
               </div>
-              <div
-                className="timetable-grid"
-                style={{
-                  gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
-                  gridTemplateRows: `repeat(${slots.length}, 40px)`,
-                }}
-              >
-                {slots.map((slot, rowIndex) => (
-                  <div key={`time-${slot}`} className="time-cell" style={{ gridRow: rowIndex + 1 }}>
-                    {formatMinutes(slot)}
+              {currentViewConfig.entities.length === 0 ? (
+                <p className="timetable-empty">No {currentViewConfig.label} yet.</p>
+              ) : (
+                <>
+                  <div
+                    className="day-headers"
+                    style={{
+                      gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
+                    }}
+                  >
+                    <div className="time-header">Time</div>
+                    {visibleDays.map((day) => (
+                      <div key={day} className="day-header">
+                        {day}
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {visibleDays.map((day, dayIndex) =>
-                  slots.map((slot, rowIndex) => (
-                    <div
-                      key={`${day}-${slot}`}
-                      className={`cell ${
-                        selectionRange &&
-                        selectionRange.day === day &&
-                        slot >= selectionRange.startMinutes &&
-                        slot < selectionRange.endMinutes
-                          ? "selected"
-                          : ""
-                      }`}
-                      style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
-                      onMouseDown={() => handleSelectStart(day, rowIndex)}
-                      onMouseEnter={() => handleSelectMove(rowIndex)}
-                      onMouseUp={() => setIsSelecting(false)}
-                    />
-                  ))
-                )}
-                {timetableEntries.flatMap((entry) => {
-                  const days = entry.Days.split(",").map((d) => d.trim());
-                  const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
-                  const startIndex = Math.max(
-                    0,
-                    slots.findIndex((slot) => slot >= start)
-                  );
-                  const endIndex = Math.max(
-                    startIndex + 1,
-                    slots.findIndex((slot) => slot >= end)
-                  );
-                  return days
-                    .filter((day) => visibleDays.includes(day))
-                    .map((day) => {
-                      const column = visibleDays.indexOf(day) + 2;
-                      return (
+                  <div
+                    className="timetable-grid"
+                    style={{
+                      gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
+                      gridTemplateRows: `repeat(${slots.length}, 40px)`,
+                    }}
+                  >
+                    {slots.map((slot, rowIndex) => (
+                      <div
+                        key={`time-${slot}`}
+                        className="time-cell"
+                        style={{ gridRow: rowIndex + 1 }}
+                      >
+                        {formatMinutes(slot)}
+                      </div>
+                    ))}
+                    {visibleDays.map((day, dayIndex) =>
+                      slots.map((slot, rowIndex) => (
                         <div
-                          key={`${entry.id}-${day}`}
-                          className={`block ${conflictSet.has(entry.id) ? "conflict" : ""}`}
-                          style={{
-                            gridColumn: column,
-                            gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
-                          }}
-                        >
-                          <div className="block-title">{entry["Course Code"]}</div>
-                          {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
-                          <div>{entry.Room}</div>
-                          <div>{entry.Faculty}</div>
-                        </div>
+                          key={`${day}-${slot}`}
+                          className={`cell ${
+                            selectionRange &&
+                            selectionRange.day === day &&
+                            slot >= selectionRange.startMinutes &&
+                            slot < selectionRange.endMinutes
+                              ? "selected"
+                              : ""
+                          }`}
+                          style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
+                          onMouseDown={() => handleSelectStart(day, rowIndex)}
+                          onMouseEnter={() => handleSelectMove(rowIndex)}
+                          onMouseUp={() => setIsSelecting(false)}
+                        />
+                      ))
+                    )}
+                    {timetableEntries.flatMap((entry) => {
+                      const days = entry.Days.split(",").map((d) => d.trim());
+                      const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
+                      const startIndex = Math.max(
+                        0,
+                        slots.findIndex((slot) => slot >= start)
                       );
-                    });
-                })}
-              </div>
+                      const endIndex = Math.max(
+                        startIndex + 1,
+                        slots.findIndex((slot) => slot >= end)
+                      );
+                      return days
+                        .filter((day) => visibleDays.includes(day))
+                        .map((day) => {
+                          const column = visibleDays.indexOf(day) + 2;
+                          return (
+                            <div
+                              key={`${entry.id}-${day}`}
+                              className={`block ${conflictSet.has(entry.id) ? "conflict" : ""}`}
+                              style={{
+                                gridColumn: column,
+                                gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
+                              }}
+                            >
+                              <div className="block-title">{entry["Course Code"]}</div>
+                              {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
+                              {viewMode !== "timetable-faculty" && <div>{entry.Faculty}</div>}
+                              {viewMode !== "timetable-room" && <div>{entry.Room}</div>}
+                            </div>
+                          );
+                        });
+                    })}
+                  </div>
+                </>
+              )}
               {contextMenu && (
                 <div
                   className="context-menu"

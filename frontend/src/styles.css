@@ -150,16 +150,60 @@ body {
   overflow: auto;
 }
 
-.timetable-title {
-  text-align: center;
-  font-weight: 600;
-  font-size: 0.95rem;
-  padding: 8px;
+.timetable-header {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
   background: #f7f9fc;
   border: 1px solid #ccd3df;
   border-radius: 6px;
   margin-bottom: 8px;
+}
+
+.timetable-header-left,
+.timetable-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timetable-header-right {
+  justify-content: flex-end;
+}
+
+.timetable-header select {
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.timetable-title {
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
   color: #2f3b52;
+}
+
+.nav-button {
+  border: 1px solid #ccd3df;
+  background: #ffffff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.nav-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.timetable-empty {
+  text-align: center;
+  color: #5b6b85;
+  font-size: 0.9rem;
+  padding: 24px 0;
 }
 
 .day-headers {
