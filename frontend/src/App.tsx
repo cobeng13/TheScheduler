@@ -25,7 +25,7 @@ type ConflictSummary = {
 
 type ConflictReport = { conflicts: ConflictSummary[] };
 
-type ViewMode = "text" | "timetable-class" | "timetable-faculty" | "timetable-room";
+type ViewMode = "text" | "timetable-section" | "timetable-faculty" | "timetable-room";
 
 type Selection = {
   day: string;
@@ -67,8 +67,15 @@ const formatMinutes = (minutes: number) => {
     .padStart(2, "0")}`;
 };
 
-const toLpuLabel = (start: number, end: number) =>
-  `${formatMinutes(start)} - ${formatMinutes(end)}`;
+const toLpuStd = (minutes: number) => {
+  const hours24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const meridian = hours24 >= 12 ? "p" : "a";
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${hours12}:${mins.toString().padStart(2, "0")}${meridian}`;
+};
+
+const toLpuLabel = (start: number, end: number) => `${toLpuStd(start)}-${toLpuStd(end)}`;
 
 const overlap = (startA: number, endA: number, startB: number, endB: number) =>
   startA < endB && startB < endA;
@@ -88,6 +95,31 @@ const parseTimeRange = (range: string) => {
   return { start: toMinutes(start), end: toMinutes(end) };
 };
 
+const parseLpuRange = (range: string) => {
+  const match = range
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})\s*([ap])\s*-\s*(\d{1,2}):(\d{2})\s*([ap])$/i);
+  if (!match) {
+    return null;
+  }
+  const [, startH, startM, startMeridian, endH, endM, endMeridian] = match;
+  const toMinutes = (hours: number, minutes: number, meridian: string) => {
+    if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) {
+      return null;
+    }
+    const isPm = meridian.toLowerCase() === "p";
+    const normalizedHours = hours % 12 + (isPm ? 12 : 0);
+    return normalizedHours * 60 + minutes;
+  };
+  const startMinutes = toMinutes(Number(startH), Number(startM), startMeridian);
+  const endMinutes = toMinutes(Number(endH), Number(endM), endMeridian);
+  if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+    return null;
+  }
+  const time24 = `${formatMinutes(startMinutes)}-${formatMinutes(endMinutes)}`;
+  return { time24, startMinutes, endMinutes };
+};
+
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -103,7 +135,7 @@ export default function App() {
   const [faculty, setFaculty] = useState<NamedEntity[]>([]);
   const [rooms, setRooms] = useState<NamedEntity[]>([]);
   const [conflicts, setConflicts] = useState<ConflictReport>({ conflicts: [] });
-  const [viewMode, setViewMode] = useState<ViewMode>("timetable-class");
+  const [viewMode, setViewMode] = useState<ViewMode>("timetable-section");
   const [showSunday, setShowSunday] = useState(false);
   const [useQuarterHours, setUseQuarterHours] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
@@ -136,6 +168,8 @@ export default function App() {
   const [formError, setFormError] = useState("");
   const [editEntryId, setEditEntryId] = useState<number | null>(null);
   const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
+  const [editError, setEditError] = useState("");
+  const [isSelecting, setIsSelecting] = useState(false);
 
   const refreshAll = async () => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes, conflictsRes] =
@@ -184,10 +218,11 @@ export default function App() {
   const handleSelectStart = (day: string, index: number) => {
     setSelection({ day, startIndex: index, endIndex: index });
     setContextMenu(null);
+    setIsSelecting(true);
   };
 
   const handleSelectMove = (index: number) => {
-    if (!selection) return;
+    if (!selection || !isSelecting) return;
     setSelection({
       ...selection,
       endIndex: index,
@@ -229,7 +264,15 @@ export default function App() {
   };
 
   const handleCreateSchedule = async () => {
+    if (scheduleForm["Time (LPU Std)"]) {
+      const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
+      if (!parsed) {
+        setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
+        return;
+      }
+    }
     const requiredFields: Array<keyof ScheduleEntry> = [
+      "Time (LPU Std)",
       "Section",
       "Course Code",
       "Room",
@@ -264,15 +307,24 @@ export default function App() {
   const handleEdit = (entry: ScheduleEntry) => {
     setEditEntryId(entry.id);
     setEditEntry({ ...entry });
+    setEditError("");
   };
 
   const handleCancelEdit = () => {
     setEditEntryId(null);
     setEditEntry(null);
+    setEditError("");
   };
 
   const handleSaveEdit = async () => {
     if (!editEntry || editEntryId === null) return;
+    if (editEntry["Time (LPU Std)"]) {
+      const parsed = parseLpuRange(editEntry["Time (LPU Std)"]);
+      if (!parsed) {
+        setEditError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
+        return;
+      }
+    }
     await fetch(`${API_BASE}/schedule/${editEntryId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -307,6 +359,23 @@ export default function App() {
     const confirmed = window.confirm("This will clear the current timetable. Continue?");
     if (!confirmed) return;
     await fetch(`${API_BASE}/file/reset`, { method: "POST" });
+    setExportFilter("");
+    setSelection(null);
+    setContextMenu(null);
+    setScheduleForm({
+      id: 0,
+      "Program": "",
+      "Section": "",
+      "Course Code": "",
+      "Course Description": "",
+      Units: 0,
+      "# of Hours": 0,
+      "Time (LPU Std)": "",
+      "Time (24 Hrs)": "",
+      Days: "",
+      Room: "",
+      Faculty: "",
+    });
     refreshAll();
   };
 
@@ -348,7 +417,7 @@ export default function App() {
   }, [entries, filterText, sortKey, sortDirection]);
 
   const timetableEntries = useMemo(() => {
-    if (viewMode === "timetable-class" && exportFilter) {
+    if (viewMode === "timetable-section" && exportFilter) {
       return entries.filter((entry) => entry.Section === exportFilter);
     }
     if (viewMode === "timetable-faculty" && exportFilter) {
@@ -362,10 +431,10 @@ export default function App() {
 
   const timetableGroup = viewMode.startsWith("timetable")
     ? viewMode.split("-")[1]
-    : "class";
+    : "section";
 
   const exportOptions =
-    viewMode === "timetable-class"
+    viewMode === "timetable-section"
       ? sections
       : viewMode === "timetable-faculty"
         ? faculty
@@ -422,8 +491,8 @@ export default function App() {
         <div className="ribbon-group">
           <div className="ribbon-title">View</div>
           <button onClick={() => setViewMode("text")}>Text View</button>
-          <button onClick={() => setViewMode("timetable-class")}>
-            Timetable: Per Class
+          <button onClick={() => setViewMode("timetable-section")}>
+            Timetable: Per Section
           </button>
           <button onClick={() => setViewMode("timetable-faculty")}>
             Timetable: Per Faculty
@@ -440,11 +509,7 @@ export default function App() {
           <button onClick={() => handleExport("/reports/text.xlsx", "text-view.xlsx")}>
             Export Text View (.xlsx)
           </button>
-          <button
-            onClick={() =>
-              handleExport(`/reports/timetable/${timetableGroup}.csv`, "timetable.csv")
-            }
-          >
+          <button onClick={() => handleExport(`/reports/timetable/${timetableGroup}.csv`, "timetable.csv")}>
             Export Timetable View
           </button>
           <button
@@ -532,15 +597,35 @@ export default function App() {
                           {editEntryId === entry.id && editEntry ? (
                             <input
                               value={String(editEntry[header])}
-                              onChange={(event) =>
+                              readOnly={header === "Time (24 Hrs)"}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                if (header === "Time (LPU Std)") {
+                                  const parsed = parseLpuRange(value);
+                                  setEditEntry({
+                                    ...editEntry,
+                                    "Time (LPU Std)": value,
+                                    "Time (24 Hrs)": parsed
+                                      ? parsed.time24
+                                      : value
+                                        ? editEntry["Time (24 Hrs)"]
+                                        : "",
+                                  });
+                                  setEditError(
+                                    value && !parsed
+                                      ? "Invalid Time (LPU Std). Example: 10:00a-12:00p"
+                                      : ""
+                                  );
+                                  return;
+                                }
                                 setEditEntry({
                                   ...editEntry,
                                   [header]:
                                     header === "Units" || header === "# of Hours"
-                                      ? Number(event.target.value)
-                                      : event.target.value,
-                                } as ScheduleEntry)
-                              }
+                                      ? Number(value)
+                                      : value,
+                                } as ScheduleEntry);
+                              }}
                             />
                           ) : (
                             entry[header]
@@ -548,11 +633,11 @@ export default function App() {
                         </td>
                       ))}
                       <td>
-                        {editEntryId === entry.id ? (
-                          <>
-                            <button onClick={handleSaveEdit}>Save</button>
-                            <button onClick={handleCancelEdit}>Cancel</button>
-                          </>
+                {editEntryId === entry.id ? (
+                  <>
+                    <button onClick={handleSaveEdit}>Save</button>
+                    <button onClick={handleCancelEdit}>Cancel</button>
+                  </>
                         ) : (
                           <>
                             <button onClick={() => handleEdit(entry)}>Edit</button>
@@ -564,9 +649,15 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+              {editError && <p className="error">{editError}</p>}
             </div>
           ) : (
-            <div className="timetable" onContextMenu={handleContextMenu}>
+            <div className="timetable" onContextMenu={handleContextMenu} onMouseUp={() => setIsSelecting(false)}>
+              {viewMode === "timetable-section" && (
+                <div className="timetable-title">
+                  {exportFilter ? `Section: ${exportFilter}` : "All Sections"}
+                </div>
+              )}
               <div
                 className="day-headers"
                 style={{
@@ -607,7 +698,7 @@ export default function App() {
                       style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
                       onMouseDown={() => handleSelectStart(day, rowIndex)}
                       onMouseEnter={() => handleSelectMove(rowIndex)}
-                      onMouseUp={() => setSelection((prev) => prev)}
+                      onMouseUp={() => setIsSelecting(false)}
                     />
                   ))
                 )}
@@ -636,7 +727,7 @@ export default function App() {
                           }}
                         >
                           <div className="block-title">{entry["Course Code"]}</div>
-                          <div>{entry.Section}</div>
+                          {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
                           <div>{entry.Room}</div>
                           <div>{entry.Faculty}</div>
                         </div>
@@ -736,24 +827,27 @@ export default function App() {
             Time (LPU Std)
             <input
               value={scheduleForm["Time (LPU Std)"]}
-              onChange={(event) =>
-                setScheduleForm({
-                  ...scheduleForm,
-                  "Time (LPU Std)": event.target.value,
-                })
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                const parsed = parseLpuRange(value);
+                setScheduleForm((prev) => ({
+                  ...prev,
+                  "Time (LPU Std)": value,
+                  "Time (24 Hrs)": parsed ? parsed.time24 : value ? prev["Time (24 Hrs)"] : "",
+                }));
+                if (value && !parsed) {
+                  setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
+                } else {
+                  setFormError("");
+                }
+              }}
             />
           </label>
           <label>
             Time (24 Hrs)
             <input
               value={scheduleForm["Time (24 Hrs)"]}
-              onChange={(event) =>
-                setScheduleForm({
-                  ...scheduleForm,
-                  "Time (24 Hrs)": event.target.value,
-                })
-              }
+              readOnly
             />
           </label>
           <label>

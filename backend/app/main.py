@@ -32,58 +32,6 @@ def get_db():
         db.close()
 
 
-def seed_if_empty(db: Session) -> None:
-    if crud.list_schedule_entries(db):
-        return
-    seed_entries = [
-        schemas.ScheduleEntryCreate(
-            **{
-                "Program": "BSCS",
-                "Section": "A",
-                "Course Code": "CS101",
-                "Course Description": "Intro to CS",
-                "Units": 3,
-                "# of Hours": 3,
-                "Time (LPU Std)": "7:00 AM - 8:30 AM",
-                "Time (24 Hrs)": "07:00-08:30",
-                "Days": "Monday, Wednesday",
-                "Room": "R101",
-                "Faculty": "Dr. Ada",
-            }
-        ),
-        schemas.ScheduleEntryCreate(
-            **{
-                "Program": "BSIT",
-                "Section": "B",
-                "Course Code": "IT202",
-                "Course Description": "Networks",
-                "Units": 3,
-                "# of Hours": 3,
-                "Time (LPU Std)": "9:00 AM - 10:30 AM",
-                "Time (24 Hrs)": "09:00-10:30",
-                "Days": "Tuesday, Thursday",
-                "Room": "R202",
-                "Faculty": "Prof. Turing",
-            }
-        ),
-    ]
-    for entry in seed_entries:
-        crud.create_schedule_entry(db, entry)
-
-    crud.create_named_entity(db, models.Section, "A")
-    crud.create_named_entity(db, models.Section, "B")
-    crud.create_named_entity(db, models.Faculty, "Dr. Ada")
-    crud.create_named_entity(db, models.Faculty, "Prof. Turing")
-    crud.create_named_entity(db, models.Room, "R101")
-    crud.create_named_entity(db, models.Room, "R202")
-
-
-@app.on_event("startup")
-def startup_seed():
-    with SessionLocal() as db:
-        seed_if_empty(db)
-
-
 @app.get("/schedule", response_model=List[schemas.ScheduleEntry])
 def list_schedule(db: Session = Depends(get_db)):
     return crud.list_schedule_entries(db)
@@ -102,7 +50,7 @@ def create_schedule(entry: schemas.ScheduleEntryCreate, db: Session = Depends(ge
     try:
         return crud.create_schedule_entry(db, entry)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.put("/schedule/{entry_id}", response_model=schemas.ScheduleEntry)
@@ -112,7 +60,7 @@ def update_schedule(
     try:
         return crud.update_schedule_entry(db, entry_id, entry)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.delete("/schedule/{entry_id}")
@@ -196,9 +144,9 @@ def export_text_xlsx(db: Session = Depends(get_db)):
 
 
 def filter_entries(entries, group: str, filter_value: str | None):
-    if group not in {"class", "faculty", "room"}:
+    if group not in {"section", "faculty", "room"}:
         raise HTTPException(status_code=400, detail="Invalid group")
-    if group == "class":
+    if group == "section":
         if filter_value:
             entries = [e for e in entries if e["Section"] == filter_value]
     elif group == "faculty":
@@ -255,5 +203,4 @@ def export_database():
 def reset_database(db: Session = Depends(get_db)):
     models.Base.metadata.drop_all(bind=engine)
     models.Base.metadata.create_all(bind=engine)
-    seed_if_empty(db)
     return {"ok": True}

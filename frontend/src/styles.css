@@ -150,6 +150,18 @@ body {
   overflow: auto;
 }
 
+.timetable-title {
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 8px;
+  background: #f7f9fc;
+  border: 1px solid #ccd3df;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  color: #2f3b52;
+}
+
 .day-headers {
   display: grid;
   position: sticky;

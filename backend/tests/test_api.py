@@ -18,7 +18,7 @@ def test_create_and_delete_schedule_entry():
         "Course Description": "Algorithms",
         "Units": 3,
         "# of Hours": 3,
-        "Time (LPU Std)": "1:00 PM - 2:30 PM",
+        "Time (LPU Std)": "1:00p-2:30p",
         "Time (24 Hrs)": "13:00-14:30",
         "Days": "Monday",
         "Room": "R101",
@@ -35,4 +35,4 @@ def test_create_and_delete_schedule_entry():
 def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
-    assert client.get("/reports/timetable/class.xlsx").status_code == 200
+    assert client.get("/reports/timetable/section.xlsx").status_code == 200

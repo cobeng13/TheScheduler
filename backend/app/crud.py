@@ -8,7 +8,9 @@ from .schemas import ScheduleEntryCreate, ScheduleEntryUpdate
 
 
 def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.ScheduleEntry:
-    start_minutes, end_minutes = time_utils.parse_time_range(entry.time_24)
+    if not entry.time_lpu:
+        raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
+    time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(entry.time_lpu)
     model = models.ScheduleEntry(
         program=entry.program,
         section=entry.section,
@@ -17,7 +19,7 @@ def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.Sch
         units=entry.units,
         hours=entry.hours,
         time_lpu=entry.time_lpu,
-        time_24=entry.time_24,
+        time_24=time_24,
         days=entry.days,
         room=entry.room,
         faculty=entry.faculty,
@@ -36,7 +38,9 @@ def update_schedule_entry(
     model = db.get(models.ScheduleEntry, entry_id)
     if model is None:
         raise ValueError("Schedule entry not found")
-    start_minutes, end_minutes = time_utils.parse_time_range(entry.time_24)
+    if not entry.time_lpu:
+        raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
+    time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(entry.time_lpu)
     model.program = entry.program
     model.section = entry.section
     model.course_code = entry.course_code
@@ -44,7 +48,7 @@ def update_schedule_entry(
     model.units = entry.units
     model.hours = entry.hours
     model.time_lpu = entry.time_lpu
-    model.time_24 = entry.time_24
+    model.time_24 = time_24
     model.days = entry.days
     model.room = entry.room
     model.faculty = entry.faculty
