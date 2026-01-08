@@ -206,6 +206,70 @@ body {
   font-size: 0.85rem;
 }
 
+.modal.modal-wide {
+  width: min(520px, 92vw);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-close {
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.modal-section {
+  border-top: 1px solid #e2e6ef;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-section h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.modal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.modal-row select {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.color-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-input input {
+  width: 120px;
+  padding: 4px 6px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #c6d0dd;
+  border-radius: 4px;
+  display: inline-block;
+}
+
 .modal h3 {
   margin: 0;
   font-size: 1rem;
@@ -502,13 +566,19 @@ body {
 
 .block {
   background: rgba(110, 160, 220, 0.85);
-  border-left: 4px solid #2f5fa7;
+  border: 1px solid #2f5fa7;
   padding: var(--block-padding);
   font-size: var(--font-size);
   color: #fff;
   z-index: 1;
   overflow: hidden;
   cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  word-break: break-word;
+  line-height: 1.2;
 }
 
 .block.conflict {
@@ -526,7 +596,14 @@ body {
 
 .block-title {
   font-weight: 600;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+}
+
+.block-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
 }
 
 .context-menu {

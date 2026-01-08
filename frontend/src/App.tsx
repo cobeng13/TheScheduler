@@ -48,7 +48,30 @@ type MoveSnapshot = {
   deletedEntry?: ScheduleEntry;
 };
 
+type CustomizeSettings = {
+  blockDisplay: {
+    showCourseCode: boolean;
+    showRoom: boolean;
+    showFaculty: boolean;
+    useFacultyColors: boolean;
+  };
+  facultyColors: Record<string, string>;
+  sectionBgColors: Record<string, string>;
+};
+
 const API_BASE = "http://localhost:8000";
+const CUSTOMIZE_STORAGE_KEY = "scheduler.customize";
+
+const defaultCustomizeSettings: CustomizeSettings = {
+  blockDisplay: {
+    showCourseCode: true,
+    showRoom: true,
+    showFaculty: true,
+    useFacultyColors: false,
+  },
+  facultyColors: {},
+  sectionBgColors: {},
+};
 
 const canonicalHeaders = [
   "Program",
@@ -148,6 +171,18 @@ const parseLpuRange = (range: string) => {
   const time24 = `${formatMinutes(startMinutes)}-${formatMinutes(endMinutes)}`;
   return { time24, startMinutes, endMinutes };
 };
+
+const getReadableTextColor = (hex: string) => {
+  const cleaned = hex.replace("#", "");
+  if (cleaned.length !== 6) return "#ffffff";
+  const r = parseInt(cleaned.slice(0, 2), 16);
+  const g = parseInt(cleaned.slice(2, 4), 16);
+  const b = parseInt(cleaned.slice(4, 6), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.6 ? "#1c1c1c" : "#ffffff";
+};
+
+const isValidHex = (value: string) => /^#?[0-9a-fA-F]{6}$/.test(value.trim());
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -295,10 +330,18 @@ export default function App() {
   } | null>(null);
   const [isCsvImporting, setIsCsvImporting] = useState(false);
   const [csvInputKey, setCsvInputKey] = useState(0);
+  const [customizeSettings, setCustomizeSettings] =
+    useState<CustomizeSettings>(defaultCustomizeSettings);
+  const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
+  const [selectedFacultyColor, setSelectedFacultyColor] = useState("");
+  const [facultyColorInput, setFacultyColorInput] = useState("");
+  const [selectedSectionColor, setSelectedSectionColor] = useState("");
+  const [sectionColorInput, setSectionColorInput] = useState("");
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const customizeModalRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
@@ -342,6 +385,22 @@ export default function App() {
     }
     if (storedContainsRoom) {
       setContainsRoom(storedContainsRoom === "true");
+    }
+    const storedCustomize = localStorage.getItem(CUSTOMIZE_STORAGE_KEY);
+    if (storedCustomize) {
+      try {
+        const parsed = JSON.parse(storedCustomize) as CustomizeSettings;
+        setCustomizeSettings({
+          ...defaultCustomizeSettings,
+          ...parsed,
+          blockDisplay: {
+            ...defaultCustomizeSettings.blockDisplay,
+            ...parsed.blockDisplay,
+          },
+        });
+      } catch {
+        setCustomizeSettings(defaultCustomizeSettings);
+      }
     }
   }, []);
 
@@ -403,6 +462,10 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    localStorage.setItem(CUSTOMIZE_STORAGE_KEY, JSON.stringify(customizeSettings));
+  }, [customizeSettings]);
+
+  useEffect(() => {
     if (!openMenu) return;
     const handleClick = (event: MouseEvent) => {
       if (!menuRef.current) return;
@@ -429,6 +492,49 @@ export default function App() {
       setShowRoomRules(false);
     }
   }, [openMenu]);
+
+  useEffect(() => {
+    if (!isCustomizeOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!customizeModalRef.current) return;
+      if (!customizeModalRef.current.contains(event.target as Node)) {
+        setIsCustomizeOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsCustomizeOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [isCustomizeOpen]);
+
+  useEffect(() => {
+    if (!selectedFacultyColor && facultyOptions.length > 0) {
+      setSelectedFacultyColor(facultyOptions[0].name);
+    }
+  }, [facultyOptions, selectedFacultyColor]);
+
+  useEffect(() => {
+    if (!selectedSectionColor && sectionOptions.length > 0) {
+      setSelectedSectionColor(sectionOptions[0].name);
+    }
+  }, [sectionOptions, selectedSectionColor]);
+
+  useEffect(() => {
+    if (!selectedFacultyColor) return;
+    setFacultyColorInput(customizeSettings.facultyColors[selectedFacultyColor] ?? "");
+  }, [selectedFacultyColor, customizeSettings.facultyColors]);
+
+  useEffect(() => {
+    if (!selectedSectionColor) return;
+    setSectionColorInput(customizeSettings.sectionBgColors[selectedSectionColor] ?? "");
+  }, [selectedSectionColor, customizeSettings.sectionBgColors]);
 
   const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
     if (!mode.startsWith("timetable") || !selectionName) {
@@ -1135,6 +1241,67 @@ export default function App() {
     setCsvImportState(null);
   };
 
+  const handleCustomizeToggle = () => {
+    setOpenMenu(null);
+    setIsCustomizeOpen(true);
+  };
+
+  const updateBlockDisplay = (key: keyof CustomizeSettings["blockDisplay"], value: boolean) => {
+    setCustomizeSettings((prev) => ({
+      ...prev,
+      blockDisplay: {
+        ...prev.blockDisplay,
+        [key]: value,
+      },
+    }));
+  };
+
+  const handleSaveFacultyColor = () => {
+    if (!selectedFacultyColor || !isValidHex(facultyColorInput)) return;
+    const normalized = facultyColorInput.startsWith("#")
+      ? facultyColorInput
+      : `#${facultyColorInput}`;
+    setCustomizeSettings((prev) => ({
+      ...prev,
+      facultyColors: {
+        ...prev.facultyColors,
+        [selectedFacultyColor]: normalized,
+      },
+    }));
+  };
+
+  const handleClearFacultyColor = () => {
+    if (!selectedFacultyColor) return;
+    setCustomizeSettings((prev) => {
+      const next = { ...prev.facultyColors };
+      delete next[selectedFacultyColor];
+      return { ...prev, facultyColors: next };
+    });
+  };
+
+  const handleSaveSectionColor = () => {
+    if (!selectedSectionColor || !isValidHex(sectionColorInput)) return;
+    const normalized = sectionColorInput.startsWith("#")
+      ? sectionColorInput
+      : `#${sectionColorInput}`;
+    setCustomizeSettings((prev) => ({
+      ...prev,
+      sectionBgColors: {
+        ...prev.sectionBgColors,
+        [selectedSectionColor]: normalized,
+      },
+    }));
+  };
+
+  const handleClearSectionColor = () => {
+    if (!selectedSectionColor) return;
+    setCustomizeSettings((prev) => {
+      const next = { ...prev.sectionBgColors };
+      delete next[selectedSectionColor];
+      return { ...prev, sectionBgColors: next };
+    });
+  };
+
   const handleExport = async (path: string, filename: string) => {
     const res = await fetch(`${API_BASE}${path}`);
     const blob = await res.blob();
@@ -1166,6 +1333,10 @@ export default function App() {
     currentViewConfig.selected || currentViewConfig.entities[0]?.name || "";
   const canExportTimetable =
     isTimetableView && Boolean(effectiveSelection) && currentViewConfig.entities.length > 0;
+  const currentSectionBg =
+    viewMode === "timetable-section"
+      ? customizeSettings.sectionBgColors[effectiveSelection]
+      : undefined;
 
   const conflictDetails = useMemo(() => {
     const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
@@ -1469,6 +1640,11 @@ export default function App() {
                 </div>
               ) : null}
             </div>
+            <div className="menu-group">
+              <button className="menu-button" onClick={handleCustomizeToggle} type="button">
+                Customize ▼
+              </button>
+            </div>
           </div>
           <div className="view-buttons">
             <button
@@ -1561,6 +1737,143 @@ export default function App() {
               >
                 {isCsvImporting ? "Importing..." : "Yes, Replace"}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isCustomizeOpen ? (
+        <div className="modal-overlay">
+          <div className="modal modal-wide" ref={customizeModalRef}>
+            <div className="modal-header">
+              <h3>Customize Timetable</h3>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setIsCustomizeOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-section">
+              <h4>Block Layout</h4>
+              <label className="menu-checkbox">
+                <input
+                  type="checkbox"
+                  checked={customizeSettings.blockDisplay.showCourseCode}
+                  onChange={(event) =>
+                    updateBlockDisplay("showCourseCode", event.target.checked)
+                  }
+                />
+                Show Course Code
+              </label>
+              <label className="menu-checkbox">
+                <input
+                  type="checkbox"
+                  checked={customizeSettings.blockDisplay.showRoom}
+                  onChange={(event) => updateBlockDisplay("showRoom", event.target.checked)}
+                />
+                Show Room
+              </label>
+              <label className="menu-checkbox">
+                <input
+                  type="checkbox"
+                  checked={customizeSettings.blockDisplay.showFaculty}
+                  onChange={(event) =>
+                    updateBlockDisplay("showFaculty", event.target.checked)
+                  }
+                />
+                Show Faculty name
+              </label>
+              <label className="menu-checkbox">
+                <input
+                  type="checkbox"
+                  checked={customizeSettings.blockDisplay.useFacultyColors}
+                  onChange={(event) =>
+                    updateBlockDisplay("useFacultyColors", event.target.checked)
+                  }
+                />
+                Use faculty colors for class blocks
+              </label>
+            </div>
+            <div className="modal-section">
+              <h4>Faculty Colors</h4>
+              <div className="modal-row">
+                <select
+                  value={selectedFacultyColor}
+                  onChange={(event) => setSelectedFacultyColor(event.target.value)}
+                >
+                  {facultyOptions.map((item) => (
+                    <option key={item.id} value={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="color-input">
+                  <input
+                    value={facultyColorInput}
+                    onChange={(event) => setFacultyColorInput(event.target.value)}
+                    placeholder="#RRGGBB"
+                  />
+                  <span
+                    className="color-swatch"
+                    style={{
+                      backgroundColor: isValidHex(facultyColorInput)
+                        ? facultyColorInput.startsWith("#")
+                          ? facultyColorInput
+                          : `#${facultyColorInput}`
+                        : "#ffffff",
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" onClick={handleSaveFacultyColor}>
+                  Save Color
+                </button>
+                <button type="button" onClick={handleClearFacultyColor}>
+                  Clear Color
+                </button>
+              </div>
+            </div>
+            <div className="modal-section">
+              <h4>Section Background</h4>
+              <div className="modal-row">
+                <select
+                  value={selectedSectionColor}
+                  onChange={(event) => setSelectedSectionColor(event.target.value)}
+                >
+                  {sectionOptions.map((item) => (
+                    <option key={item.id} value={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="color-input">
+                  <input
+                    value={sectionColorInput}
+                    onChange={(event) => setSectionColorInput(event.target.value)}
+                    placeholder="#RRGGBB"
+                  />
+                  <span
+                    className="color-swatch"
+                    style={{
+                      backgroundColor: isValidHex(sectionColorInput)
+                        ? sectionColorInput.startsWith("#")
+                          ? sectionColorInput
+                          : `#${sectionColorInput}`
+                        : "#ffffff",
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" onClick={handleSaveSectionColor}>
+                  Save Background
+                </button>
+                <button type="button" onClick={handleClearSectionColor}>
+                  Clear Background
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1692,6 +2005,13 @@ export default function App() {
               onContextMenu={handleContextMenu}
               onMouseUp={finalizeSelection}
               ref={timetableRef}
+              style={
+                currentSectionBg
+                  ? {
+                      backgroundColor: currentSectionBg,
+                    }
+                  : undefined
+              }
             >
               <div className="timetable-header">
                 <div className="timetable-header-left">
@@ -1837,6 +2157,13 @@ export default function App() {
                         .filter((day) => visibleDays.includes(day))
                         .map((day) => {
                           const column = visibleDays.indexOf(day) + 2;
+                          const blockBg =
+                            !conflictSet.has(entry.id) &&
+                            customizeSettings.blockDisplay.useFacultyColors &&
+                            customizeSettings.facultyColors[entry.Faculty]
+                              ? customizeSettings.facultyColors[entry.Faculty]
+                              : undefined;
+                          const textColor = blockBg ? getReadableTextColor(blockBg) : undefined;
                           return (
                             <div
                               key={`${entry.id}-${day}`}
@@ -1844,6 +2171,8 @@ export default function App() {
                               style={{
                                 gridColumn: column,
                                 gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
+                                backgroundColor: blockBg,
+                                color: textColor,
                               }}
                               draggable
                               onDragStart={() => handleDragStart(entry, day)}
@@ -1853,10 +2182,16 @@ export default function App() {
                               }}
                               onContextMenu={(event) => handleBlockContextMenu(event, entry)}
                             >
-                              <div className="block-title">{entry["Course Code"]}</div>
-                              {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
-                              {viewMode !== "timetable-faculty" && <div>{entry.Faculty}</div>}
-                              {viewMode !== "timetable-room" && <div>{entry.Room}</div>}
+                              <div className="block-content">
+                                {customizeSettings.blockDisplay.showCourseCode && (
+                                  <div className="block-title">{entry["Course Code"]}</div>
+                                )}
+                                {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
+                                {customizeSettings.blockDisplay.showFaculty &&
+                                  viewMode !== "timetable-faculty" && <div>{entry.Faculty}</div>}
+                                {customizeSettings.blockDisplay.showRoom &&
+                                  viewMode !== "timetable-room" && <div>{entry.Room}</div>}
+                              </div>
                             </div>
                           );
                         });
