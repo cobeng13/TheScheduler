@@ -144,17 +144,6 @@ def export_text_csv(db: Session = Depends(get_db)):
     return Response(content, media_type="text/csv")
 
 
-@app.get("/reports/text.xlsx")
-def export_text_xlsx(db: Session = Depends(get_db)):
-    entries = [
-        schemas.ScheduleEntry.from_orm(entry).model_dump(by_alias=True)
-        for entry in crud.list_schedule_entries(db)
-    ]
-    rows = reports.build_text_rows(entries)
-    content = reports.write_xlsx(rows, title="Text View")
-    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
 def filter_entries(entries, group: str, filter_value: str | None):
     if group not in {"section", "faculty", "room"}:
         raise HTTPException(status_code=400, detail="Invalid group")
@@ -180,18 +169,6 @@ def export_timetable_csv(group: str, filter_value: str | None = None, db: Sessio
     rows = reports.build_text_rows(entries)
     content = reports.write_csv(rows)
     return Response(content, media_type="text/csv")
-
-
-@app.get("/reports/timetable/{group}.xlsx")
-def export_timetable_xlsx(group: str, filter_value: str | None = None, db: Session = Depends(get_db)):
-    entries = [
-        schemas.ScheduleEntry.from_orm(entry).model_dump(by_alias=True)
-        for entry in crud.list_schedule_entries(db)
-    ]
-    entries = filter_entries(entries, group, filter_value)
-    rows = reports.build_timetable_grid(entries)
-    content = reports.write_xlsx(rows, title=f"Timetable {group.title()}")
-    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.post("/file/import")

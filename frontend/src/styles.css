@@ -398,6 +398,11 @@ body {
   cursor: pointer;
 }
 
+.panel button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .panel .secondary-button {
   background: #e9eef6;
   color: #2f3b52;

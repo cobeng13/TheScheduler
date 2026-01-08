@@ -1,3 +1,4 @@
+import html2canvas from "html2canvas";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type ScheduleEntry = {
@@ -256,8 +257,11 @@ export default function App() {
   const [moveSnapshot, setMoveSnapshot] = useState<MoveSnapshot | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [formEditId, setFormEditId] = useState<number | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
+  const timetableRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
@@ -290,6 +294,9 @@ export default function App() {
     setFaculty(await facultyRes.json());
     setRooms(await roomsRes.json());
     setConflicts(await conflictsRes.json());
+    if (currentViewConfig.selected && viewMode.startsWith("timetable")) {
+      await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    }
   };
 
   useEffect(() => {
@@ -418,10 +425,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!toast || toast.showRevert) return;
+    if (!toast || toast.showRevert || isExporting) return;
     const timeout = window.setTimeout(() => setToast(null), 3000);
     return () => window.clearTimeout(timeout);
-  }, [toast]);
+  }, [toast, isExporting]);
 
   const conflictSet = useMemo(() => {
     const set = new Set<number>();
@@ -530,6 +537,8 @@ export default function App() {
       return;
     }
 
+    if (isSaving) return;
+    setIsSaving(true);
     if (days.length > 1) {
       const remaining = days.filter((token) => token !== originDay);
       if (remaining.length > 0) {
@@ -560,7 +569,6 @@ export default function App() {
 
     setMoveSnapshot(snapshot);
     await refreshAll();
-    await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
     setDragging(null);
     setDragTarget(null);
     setLastSelection(null);
@@ -571,10 +579,13 @@ export default function App() {
       message: "Move saved",
       showRevert: false,
     });
+    setIsSaving(false);
   };
 
   const handleRevertMove = async () => {
     if (!moveSnapshot) return;
+    if (isSaving) return;
+    setIsSaving(true);
     if (moveSnapshot.createdEntryId) {
       await fetch(`${API_BASE}/schedule/${moveSnapshot.createdEntryId}`, { method: "DELETE" });
     }
@@ -596,7 +607,7 @@ export default function App() {
     setMoveSnapshot(null);
     setToast({ message: "Move reverted", showRevert: false });
     await refreshAll();
-    await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    setIsSaving(false);
   };
 
   const selectionRange = useMemo(() => {
@@ -689,6 +700,7 @@ export default function App() {
 
   const saveFormEdit = async () => {
     if (formEditId === null) return;
+    if (isSaving) return;
     const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
     if (!parsed) {
       setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
@@ -699,6 +711,7 @@ export default function App() {
       setFormError("Invalid Days. Example: M,W,F");
       return;
     }
+    setIsSaving(true);
     const payload = { ...scheduleForm, Days: normalizedDays };
     await fetch(`${API_BASE}/schedule/${formEditId}`, {
       method: "PUT",
@@ -707,18 +720,46 @@ export default function App() {
     });
     setFormEditId(null);
     setToast({ message: "Saved", showRevert: false });
-    refreshAll();
-    fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    await refreshAll();
+    setIsSaving(false);
   };
 
   const deleteEntry = async (entry: ScheduleEntry) => {
+    if (isSaving) return;
     const confirmed = window.confirm("Delete this class?");
     if (!confirmed) return;
+    setIsSaving(true);
     await fetch(`${API_BASE}/schedule/${entry.id}`, { method: "DELETE" });
     setBlockMenu(null);
     setToast({ message: "Deleted", showRevert: false });
-    refreshAll();
-    fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    await refreshAll();
+    setIsSaving(false);
+  };
+
+  const exportTimetablePng = async () => {
+    if (!timetableRef.current || !currentViewConfig.selected) return;
+    if (isExporting) return;
+    setIsExporting(true);
+    setToast({ message: "Exporting PNG...", showRevert: false });
+    const container = timetableRef.current;
+    const previousHeight = container.style.height;
+    const previousOverflow = container.style.overflow;
+    container.style.height = `${container.scrollHeight}px`;
+    container.style.overflow = "visible";
+    const canvas = await html2canvas(container);
+    container.style.height = previousHeight;
+    container.style.overflow = previousOverflow;
+    const link = document.createElement("a");
+    const modeLabel = viewMode.split("-")[1] ?? "timetable";
+    const safeName = currentViewConfig.selected
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/(^_|_$)/g, "");
+    link.download = `timetable_${modeLabel}_${safeName || "export"}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+    setToast({ message: "Exported", showRevert: false });
+    setIsExporting(false);
   };
 
   const ensureEntityExists = async (path: string, name: string, entities: NamedEntity[]) => {
@@ -735,6 +776,7 @@ export default function App() {
   };
 
   const handleCreateSchedule = async () => {
+    if (isSaving) return;
     if (formEditId !== null) {
       await saveFormEdit();
       return;
@@ -766,6 +808,7 @@ export default function App() {
       return;
     }
     setFormError("");
+    setIsSaving(true);
     await ensureEntityExists("sections", scheduleForm.Section, sections);
     await ensureEntityExists("faculty", scheduleForm.Faculty, faculty);
     await ensureEntityExists("rooms", scheduleForm.Room, rooms);
@@ -798,8 +841,9 @@ export default function App() {
     setSelectionEnd(null);
     setSelectionOrigin(null);
     setMoveSnapshot(null);
-    setToast(null);
-    refreshAll();
+    setToast({ message: "Saved", showRevert: false });
+    await refreshAll();
+    setIsSaving(false);
   };
 
   const handleEdit = (entry: ScheduleEntry) => {
@@ -1038,36 +1082,10 @@ export default function App() {
           <div className="ribbon-group">
             <div className="ribbon-title">Export</div>
             <button onClick={() => handleExport("/reports/text.csv", "text-view.csv")}>
-              Export Text View
+              Export Text View (CSV)
             </button>
-            <button onClick={() => handleExport("/reports/text.xlsx", "text-view.xlsx")}>
-              Export Text View (.xlsx)
-            </button>
-            <button
-              onClick={() =>
-                handleExport(
-                  `/reports/timetable/${timetableGroup}.csv?filter_value=${encodeURIComponent(
-                    effectiveSelection
-                  )}`,
-                  "timetable.csv"
-                )
-              }
-              disabled={!canExportTimetable}
-            >
-              Export Timetable View
-            </button>
-            <button
-              onClick={() =>
-                handleExport(
-                  `/reports/timetable/${timetableGroup}.xlsx?filter_value=${encodeURIComponent(
-                    effectiveSelection
-                  )}`,
-                  "timetable.xlsx"
-                )
-              }
-              disabled={!canExportTimetable}
-            >
-              Export Timetable View (.xlsx)
+            <button onClick={exportTimetablePng} disabled={!canExportTimetable || isExporting}>
+              Export Timetable (PNG)
             </button>
           </div>
         </div>
@@ -1206,7 +1224,12 @@ export default function App() {
               {editError && <p className="error">{editError}</p>}
             </div>
           ) : (
-            <div className="timetable" onContextMenu={handleContextMenu} onMouseUp={finalizeSelection}>
+            <div
+              className="timetable"
+              onContextMenu={handleContextMenu}
+              onMouseUp={finalizeSelection}
+              ref={timetableRef}
+            >
               <div className="timetable-header">
                 <div className="timetable-header-left">
                   <button
@@ -1408,8 +1431,12 @@ export default function App() {
                   className="block-menu"
                   style={{ top: blockMenu.y, left: blockMenu.x }}
                 >
-                  <button onClick={() => enterEditMode(blockMenu.entry)}>Edit</button>
-                  <button onClick={() => deleteEntry(blockMenu.entry)}>Delete</button>
+                  <button onClick={() => enterEditMode(blockMenu.entry)} disabled={isSaving}>
+                    Edit
+                  </button>
+                  <button onClick={() => deleteEntry(blockMenu.entry)} disabled={isSaving}>
+                    Delete
+                  </button>
                 </div>
               )}
             </div>
@@ -1566,11 +1593,11 @@ export default function App() {
               ))}
             </datalist>
           </label>
-          <button onClick={handleCreateSchedule}>
+          <button onClick={handleCreateSchedule} disabled={isSaving}>
             {formEditId ? "Save Changes" : "Add Class"}
           </button>
           {formEditId && (
-            <button className="secondary-button" onClick={cancelEditMode}>
+            <button className="secondary-button" onClick={cancelEditMode} disabled={isSaving}>
               Cancel
             </button>
           )}

@@ -32,5 +32,5 @@ Then open <http://localhost:5173>.
 
 - The SQLite database is stored at `backend/scheduler.db`.
 - Use the ribbon **File** group for New/Save/Open timetable actions.
-- CSV and Excel exports are available in the **Export** group.
+- CSV exports and timetable PNG export are available in the **Export** group.
 - Conflicts highlight in red in both the grid and text view.

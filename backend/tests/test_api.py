@@ -35,4 +35,4 @@ def test_create_and_delete_schedule_entry():
 def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
-    assert client.get("/reports/timetable/section.xlsx").status_code == 200
+    assert client.get("/reports/timetable/section.csv").status_code == 200
