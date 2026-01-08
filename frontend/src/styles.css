@@ -14,50 +14,117 @@ body {
   height: 100vh;
 }
 
-.ribbon {
+.topbar {
   display: flex;
   gap: 16px;
-  padding: 12px 16px;
+  padding: 6px 12px;
   justify-content: space-between;
   background: linear-gradient(180deg, #f9fbfe, #dbe3ef);
   border-bottom: 1px solid #c6d0dd;
+  align-items: flex-start;
 }
 
-.ribbon-groups {
-  display: flex;
-  gap: 16px;
-}
-
-.ribbon-group {
+.topbar-left {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 12px;
-  background: #f5f7fb;
+}
+
+.menu-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.menu-group {
+  position: relative;
+}
+
+.menu-button {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #bfc9d9;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.menu-button.active {
+  background: #e6edf7;
+}
+
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  background: #ffffff;
   border: 1px solid #cdd6e3;
   border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(37, 48, 68, 0.12);
+  padding: 6px;
+  z-index: 20;
 }
 
-.rules-group {
-  min-width: 220px;
-  max-width: 260px;
+.menu-dropdown.rules-dropdown {
+  min-width: 240px;
 }
 
-.rules-group input[type="text"],
-.rules-group input:not([type]) {
-  flex: 1;
-  padding: 4px 6px;
-  border: 1px solid #ccd3df;
-  border-radius: 4px;
-  font-size: 0.8rem;
-}
-
-.rule-option {
+.menu-item {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.menu-item:hover {
+  background: #f0f4fa;
+}
+
+.menu-item:disabled {
+  color: #93a0b5;
+  cursor: not-allowed;
+}
+
+.menu-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
   font-size: 0.8rem;
   color: #2f3b52;
+}
+
+.menu-divider {
+  height: 1px;
+  background: #d7dee9;
+  margin: 4px 0;
+}
+
+.view-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.view-buttons button {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  border: 1px solid #cdd6e3;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.view-buttons button.active {
+  background: #e6edf7;
 }
 
 .rule-section {
@@ -68,15 +135,22 @@ body {
   gap: 6px;
 }
 
-.rule-subtitle {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #3b4a63;
+.rule-section.compact {
+  border-top: none;
+  padding-top: 0;
 }
 
 .rule-input {
   display: flex;
   gap: 6px;
+}
+
+.rule-input input {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+  font-size: 0.8rem;
 }
 
 .rule-input button {

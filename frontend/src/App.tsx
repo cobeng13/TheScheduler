@@ -268,9 +268,13 @@ export default function App() {
   const [containsRoom, setContainsRoom] = useState(false);
   const [facultyInput, setFacultyInput] = useState("");
   const [roomInput, setRoomInput] = useState("");
+  const [openMenu, setOpenMenu] = useState<"file" | "export" | "rules" | null>(null);
+  const [showFacultyRules, setShowFacultyRules] = useState(false);
+  const [showRoomRules, setShowRoomRules] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
@@ -373,6 +377,34 @@ export default function App() {
     containsFaculty,
     containsRoom,
   ]);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(event.target as Node)) {
+        setOpenMenu(null);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openMenu]);
+
+  useEffect(() => {
+    if (!openMenu) {
+      setShowFacultyRules(false);
+      setShowRoomRules(false);
+    }
+  }, [openMenu]);
 
   const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
     if (!mode.startsWith("timetable") || !selectionName) {
@@ -1126,151 +1158,258 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="ribbon">
-        <div className="ribbon-groups">
-          <div className="ribbon-group">
-            <div className="ribbon-title">File</div>
-            <button onClick={handleReset}>New Timetable</button>
-            <button onClick={handleExportDb}>Save</button>
-            <label className="file-input">
-              Open Timetable
-              <input type="file" onChange={handleImportDb} />
-            </label>
+      <div className="topbar">
+        <div className="topbar-left" ref={menuRef}>
+          <div className="menu-bar">
+            <div className="menu-group">
+              <button
+                className={`menu-button ${openMenu === "file" ? "active" : ""}`}
+                onClick={() => setOpenMenu((prev) => (prev === "file" ? null : "file"))}
+                type="button"
+              >
+                File ▼
+              </button>
+              {openMenu === "file" ? (
+                <div className="menu-dropdown" role="menu">
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      handleReset();
+                      setOpenMenu(null);
+                    }}
+                    type="button"
+                  >
+                    New Timetable
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      handleExportDb();
+                      setOpenMenu(null);
+                    }}
+                    type="button"
+                  >
+                    Save
+                  </button>
+                  <label className="menu-item file-input">
+                    Open Timetable
+                    <input
+                      type="file"
+                      onChange={(event) => {
+                        handleImportDb(event);
+                        setOpenMenu(null);
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+            <div className="menu-group">
+              <button
+                className={`menu-button ${openMenu === "export" ? "active" : ""}`}
+                onClick={() => setOpenMenu((prev) => (prev === "export" ? null : "export"))}
+                type="button"
+              >
+                Export ▼
+              </button>
+              {openMenu === "export" ? (
+                <div className="menu-dropdown" role="menu">
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      handleExport("/reports/text.csv", "text-view.csv");
+                      setOpenMenu(null);
+                    }}
+                    type="button"
+                  >
+                    Export Text View (CSV)
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      exportTimetablePng();
+                      setOpenMenu(null);
+                    }}
+                    disabled={!canExportTimetable || isExporting}
+                    type="button"
+                  >
+                    Export Timetable (PNG)
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <div className="menu-group">
+              <button
+                className={`menu-button ${openMenu === "rules" ? "active" : ""}`}
+                onClick={() => setOpenMenu((prev) => (prev === "rules" ? null : "rules"))}
+                type="button"
+              >
+                Rules ▼
+              </button>
+              {openMenu === "rules" ? (
+                <div className="menu-dropdown rules-dropdown" role="menu">
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={ignoreFaculty}
+                      onChange={(event) => setIgnoreFaculty(event.target.checked)}
+                    />
+                    Ignore faculty conflicts
+                  </label>
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={ignoreRoom}
+                      onChange={(event) => setIgnoreRoom(event.target.checked)}
+                    />
+                    Ignore room conflicts
+                  </label>
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={ignoreTba}
+                      onChange={(event) => setIgnoreTba(event.target.checked)}
+                    />
+                    Ignore TBA time/day
+                  </label>
+                  <div className="menu-divider" />
+                  <button
+                    className="menu-item"
+                    onClick={() => setShowFacultyRules((prev) => !prev)}
+                    type="button"
+                  >
+                    {showFacultyRules ? "Hide" : "Manage"} Faculty Ignore List…
+                  </button>
+                  {showFacultyRules ? (
+                    <div className="rule-section compact">
+                      <div className="rule-input">
+                        <input
+                          value={facultyInput}
+                          onChange={(event) => setFacultyInput(event.target.value)}
+                          placeholder="Faculty name"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!facultyInput.trim()) return;
+                            setIgnoreFacultyList((prev) => [...prev, facultyInput.trim()]);
+                            setFacultyInput("");
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      <label className="menu-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={containsFaculty}
+                          onChange={(event) => setContainsFaculty(event.target.checked)}
+                        />
+                        Contains match
+                      </label>
+                      <div className="chips">
+                        {ignoreFacultyList.map((item) => (
+                          <span key={item} className="chip">
+                            {item}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setIgnoreFacultyList((prev) =>
+                                  prev.filter((value) => value !== item)
+                                )
+                              }
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <button
+                    className="menu-item"
+                    onClick={() => setShowRoomRules((prev) => !prev)}
+                    type="button"
+                  >
+                    {showRoomRules ? "Hide" : "Manage"} Room Ignore List…
+                  </button>
+                  {showRoomRules ? (
+                    <div className="rule-section compact">
+                      <div className="rule-input">
+                        <input
+                          value={roomInput}
+                          onChange={(event) => setRoomInput(event.target.value)}
+                          placeholder="Room name"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!roomInput.trim()) return;
+                            setIgnoreRoomList((prev) => [...prev, roomInput.trim()]);
+                            setRoomInput("");
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      <label className="menu-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={containsRoom}
+                          onChange={(event) => setContainsRoom(event.target.checked)}
+                        />
+                        Contains match
+                      </label>
+                      <div className="chips">
+                        {ignoreRoomList.map((item) => (
+                          <span key={item} className="chip">
+                            {item}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setIgnoreRoomList((prev) => prev.filter((value) => value !== item))
+                              }
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
-          <div className="ribbon-group">
-            <div className="ribbon-title">View</div>
-            <button onClick={() => setViewMode("text")}>Text View</button>
-            <button onClick={() => setViewMode("timetable-section")}>
+          <div className="view-buttons">
+            <button
+              className={viewMode === "text" ? "active" : ""}
+              onClick={() => setViewMode("text")}
+              type="button"
+            >
+              Text View
+            </button>
+            <button
+              className={viewMode === "timetable-section" ? "active" : ""}
+              onClick={() => setViewMode("timetable-section")}
+              type="button"
+            >
               Timetable: Per Section
             </button>
-            <button onClick={() => setViewMode("timetable-faculty")}>
+            <button
+              className={viewMode === "timetable-faculty" ? "active" : ""}
+              onClick={() => setViewMode("timetable-faculty")}
+              type="button"
+            >
               Timetable: Per Faculty
             </button>
-            <button onClick={() => setViewMode("timetable-room")}>
+            <button
+              className={viewMode === "timetable-room" ? "active" : ""}
+              onClick={() => setViewMode("timetable-room")}
+              type="button"
+            >
               Timetable: Per Room
             </button>
-          </div>
-          <div className="ribbon-group">
-            <div className="ribbon-title">Export</div>
-            <button onClick={() => handleExport("/reports/text.csv", "text-view.csv")}>
-              Export Text View (CSV)
-            </button>
-            <button onClick={exportTimetablePng} disabled={!canExportTimetable || isExporting}>
-              Export Timetable (PNG)
-            </button>
-          </div>
-          <div className="ribbon-group rules-group">
-            <div className="ribbon-title">Rules</div>
-            <label className="rule-option">
-              <input
-                type="checkbox"
-                checked={ignoreFaculty}
-                onChange={(event) => setIgnoreFaculty(event.target.checked)}
-              />
-              Ignore faculty conflicts
-            </label>
-            <label className="rule-option">
-              <input
-                type="checkbox"
-                checked={ignoreRoom}
-                onChange={(event) => setIgnoreRoom(event.target.checked)}
-              />
-              Ignore room conflicts
-            </label>
-            <label className="rule-option">
-              <input
-                type="checkbox"
-                checked={ignoreTba}
-                onChange={(event) => setIgnoreTba(event.target.checked)}
-              />
-              Ignore TBA time/day
-            </label>
-            <div className="rule-section">
-              <div className="rule-subtitle">Ignore specific Faculty</div>
-              <div className="rule-input">
-                <input
-                  value={facultyInput}
-                  onChange={(event) => setFacultyInput(event.target.value)}
-                  placeholder="Faculty name"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!facultyInput.trim()) return;
-                    setIgnoreFacultyList((prev) => [...prev, facultyInput.trim()]);
-                    setFacultyInput("");
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-              <label className="rule-option">
-                <input
-                  type="checkbox"
-                  checked={containsFaculty}
-                  onChange={(event) => setContainsFaculty(event.target.checked)}
-                />
-                Contains match
-              </label>
-              <div className="chips">
-                {ignoreFacultyList.map((item) => (
-                  <span key={item} className="chip">
-                    {item}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setIgnoreFacultyList((prev) => prev.filter((value) => value !== item))
-                      }
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="rule-section">
-              <div className="rule-subtitle">Ignore specific Rooms</div>
-              <div className="rule-input">
-                <input
-                  value={roomInput}
-                  onChange={(event) => setRoomInput(event.target.value)}
-                  placeholder="Room name"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!roomInput.trim()) return;
-                    setIgnoreRoomList((prev) => [...prev, roomInput.trim()]);
-                    setRoomInput("");
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-              <label className="rule-option">
-                <input
-                  type="checkbox"
-                  checked={containsRoom}
-                  onChange={(event) => setContainsRoom(event.target.checked)}
-                />
-                Contains match
-              </label>
-              <div className="chips">
-                {ignoreRoomList.map((item) => (
-                  <span key={item} className="chip">
-                    {item}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setIgnoreRoomList((prev) => prev.filter((value) => value !== item))
-                      }
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
         <div className="ribbon-conflicts">
