@@ -33,6 +33,12 @@ type Selection = {
   endIndex: number;
 } | null;
 
+type MoveSnapshot = {
+  previousEntries: ScheduleEntry[];
+  createdEntryId?: number;
+  deletedEntry?: ScheduleEntry;
+};
+
 const API_BASE = "http://localhost:8000";
 
 const canonicalHeaders = [
@@ -77,6 +83,9 @@ const toLpuStd = (minutes: number) => {
 };
 
 const toLpuLabel = (start: number, end: number) => `${toLpuStd(start)}-${toLpuStd(end)}`;
+
+const toTimeRange24 = (start: number, end: number) =>
+  `${formatMinutes(start)}-${formatMinutes(end)}`;
 
 const overlap = (startA: number, endA: number, startB: number, endB: number) =>
   startA < endB && startB < endA;
@@ -232,6 +241,16 @@ export default function App() {
   const [selectionOrigin, setSelectionOrigin] = useState<{ day: string; index: number } | null>(
     null
   );
+  const [dragging, setDragging] = useState<{
+    entry: ScheduleEntry;
+    day: string;
+    duration: number;
+  } | null>(null);
+  const [dragTarget, setDragTarget] = useState<{ day: string; startMinutes: number } | null>(
+    null
+  );
+  const [toast, setToast] = useState<{ message: string; showRevert: boolean } | null>(null);
+  const [moveSnapshot, setMoveSnapshot] = useState<MoveSnapshot | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
 
   useEffect(() => {
@@ -270,6 +289,23 @@ export default function App() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
+    if (!mode.startsWith("timetable") || !selectionName) {
+      setTimetableEntries([]);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (mode === "timetable-section") {
+      params.set("section", selectionName);
+    } else if (mode === "timetable-faculty") {
+      params.set("faculty", selectionName);
+    } else if (mode === "timetable-room") {
+      params.set("room", selectionName);
+    }
+    const res = await fetch(`${API_BASE}/schedule?${params.toString()}`);
+    setTimetableEntries(await res.json());
+  };
 
   const sectionOptions = useMemo(() => sortEntities(sections), [sections]);
   const facultyOptions = useMemo(() => sortEntities(faculty), [faculty]);
@@ -337,22 +373,16 @@ export default function App() {
       setTimetableEntries([]);
       return;
     }
-    const params = new URLSearchParams();
-    if (viewMode === "timetable-section") {
-      params.set("section", currentViewConfig.selected);
-    } else if (viewMode === "timetable-faculty") {
-      params.set("faculty", currentViewConfig.selected);
-    } else if (viewMode === "timetable-room") {
-      params.set("room", currentViewConfig.selected);
-    }
-    fetch(`${API_BASE}/schedule?${params.toString()}`)
-      .then((res) => res.json())
-      .then((data) => setTimetableEntries(data));
+    fetchTimetableForSelection(currentViewConfig.selected, viewMode);
   }, [viewMode, currentViewConfig.selected]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (dragging) {
+          setDragging(null);
+          setDragTarget(null);
+        }
         setLastSelection(null);
         setSelection(null);
         setSelectionEnd(null);
@@ -386,7 +416,7 @@ export default function App() {
     if (showSunday) {
       return daysOfWeek;
     }
-    return daysOfWeek.filter((day) => day !== "Sunday");
+    return daysOfWeek.filter((day) => day !== "Su");
   }, [showSunday]);
 
   const interval = useQuarterHours ? 15 : 30;
@@ -433,6 +463,110 @@ export default function App() {
     });
     setIsSelecting(false);
     setSelectionOrigin(null);
+  };
+
+  const handleDragStart = (entry: ScheduleEntry, day: string) => {
+    const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
+    setDragging({ entry, day, duration: end - start });
+    setDragTarget({ day, startMinutes: start });
+    setToast(null);
+    setMoveSnapshot(null);
+  };
+
+  const handleDragOver = (event: React.DragEvent, day: string, slot: number) => {
+    event.preventDefault();
+    if (!dragging) return;
+    setDragTarget({ day, startMinutes: slot });
+  };
+
+  const handleDrop = async () => {
+    if (!dragging || !dragTarget) return;
+    const { entry, day: originDay, duration } = dragging;
+    const startMinutes = dragTarget.startMinutes;
+    const endMinutes = startMinutes + duration;
+    const newTime24 = toTimeRange24(startMinutes, endMinutes);
+    const newTimeLpu = toLpuLabel(startMinutes, endMinutes);
+    const days = normalizeDays(entry.Days).split(",").filter(Boolean);
+    const payloadBase = {
+      ...entry,
+      Days: dragTarget.day,
+      "Time (24 Hrs)": newTime24,
+      "Time (LPU Std)": newTimeLpu,
+    };
+
+    const snapshot: MoveSnapshot = { previousEntries: [entry] };
+
+    if (days.length > 1) {
+      const remaining = days.filter((token) => token !== originDay);
+      if (remaining.length > 0) {
+        await fetch(`${API_BASE}/schedule/${entry.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...entry, Days: remaining.join(",") }),
+        });
+      } else {
+        await fetch(`${API_BASE}/schedule/${entry.id}`, { method: "DELETE" });
+        snapshot.deletedEntry = entry;
+      }
+      const { id: _id, ...createPayload } = payloadBase;
+      const createResponse = await fetch(`${API_BASE}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(createPayload),
+      });
+      const created = await createResponse.json();
+      snapshot.createdEntryId = created.id;
+    } else {
+      await fetch(`${API_BASE}/schedule/${entry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payloadBase),
+      });
+    }
+
+    setMoveSnapshot(snapshot);
+    await refreshAll();
+    await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    const conflictsRes = await fetch(`${API_BASE}/conflicts`);
+    const conflictsData = await conflictsRes.json();
+    setConflicts(conflictsData);
+    setDragging(null);
+    setDragTarget(null);
+    setLastSelection(null);
+    setSelection(null);
+    setSelectionEnd(null);
+    setSelectionOrigin(null);
+    const hasConflicts = conflictsData.conflicts?.length > 0;
+    setToast({
+      message: hasConflicts ? "Move saved — conflicts detected" : "Move saved",
+      showRevert: hasConflicts,
+    });
+  };
+
+  const handleRevertMove = async () => {
+    if (!moveSnapshot) return;
+    if (moveSnapshot.createdEntryId) {
+      await fetch(`${API_BASE}/schedule/${moveSnapshot.createdEntryId}`, { method: "DELETE" });
+    }
+    if (moveSnapshot.deletedEntry) {
+      const { id, ...rest } = moveSnapshot.deletedEntry;
+      await fetch(`${API_BASE}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rest),
+      });
+    }
+    for (const entry of moveSnapshot.previousEntries) {
+      await fetch(`${API_BASE}/schedule/${entry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry),
+      });
+    }
+    setMoveSnapshot(null);
+    setToast({ message: "Move reverted", showRevert: false });
+    await refreshAll();
+    await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
   };
 
   const selectionRange = useMemo(() => {
@@ -569,6 +703,8 @@ export default function App() {
     setSelection(null);
     setSelectionEnd(null);
     setSelectionOrigin(null);
+    setMoveSnapshot(null);
+    setToast(null);
     refreshAll();
   };
 
@@ -644,6 +780,8 @@ export default function App() {
     setLastSelection(null);
     setSelectionEnd(null);
     setSelectionOrigin(null);
+    setMoveSnapshot(null);
+    setToast(null);
     setScheduleForm({
       id: 0,
       "Program": "",
@@ -844,14 +982,15 @@ export default function App() {
             <p className="muted">No conflicts detected.</p>
           ) : (
             <ul className="conflict-list">
-              {conflictDetails.map((conflict, index) => (
-                <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
-                  <strong>{conflict?.type.toUpperCase()}</strong>:{" "}
-                  {conflict?.entry["Course Code"]} ({conflict?.entry.Section}) vs{" "}
+                  {conflictDetails.map((conflict, index) => (
+                    <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
+                      <strong>{conflict?.type.toUpperCase()}</strong>:{" "}
+                      {conflict?.entry["Course Code"]} ({conflict?.entry.Section}) vs{" "}
                       {conflict?.other["Course Code"]} ({conflict?.other.Section}) on{" "}
-                      {normalizeDays(conflict?.sharedDays.join(","))} at {conflict?.overlapTime}
-                </li>
-              ))}
+                      {conflict ? normalizeDays(conflict.sharedDays.join(",")) : ""} at{" "}
+                      {conflict?.overlapTime}
+                    </li>
+                  ))}
             </ul>
           )}
         </div>
@@ -1018,15 +1157,25 @@ export default function App() {
                       +
                     </button>
                   </div>
-          <button
-            className="nav-button"
-            onClick={handleNextEntity}
-            disabled={!hasMultipleEntities}
-          >
-            ▶
-          </button>
-        </div>
-      </div>
+                  <button
+                    className="nav-button"
+                    onClick={handleNextEntity}
+                    disabled={!hasMultipleEntities}
+                  >
+                    ▶
+                  </button>
+                </div>
+              </div>
+              {toast && (
+                <div className="toast">
+                  <span>{toast.message}</span>
+                  {toast.showRevert && moveSnapshot && (
+                    <button className="nav-button" onClick={handleRevertMove}>
+                      Revert
+                    </button>
+                  )}
+                </div>
+              )}
               {currentViewConfig.entities.length === 0 ? (
                 <p className="timetable-empty">No {currentViewConfig.label} yet.</p>
               ) : (
@@ -1046,6 +1195,11 @@ export default function App() {
                   </div>
                   <div
                     className="timetable-grid"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      handleDrop();
+                    }}
                     style={{
                       gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
                       gridTemplateRows: `repeat(${slots.length}, var(--row-height))`,
@@ -1079,6 +1233,7 @@ export default function App() {
                           onMouseDown={(event) => handleSelectStart(event, day, rowIndex)}
                           onMouseEnter={() => handleSelectMove(day, rowIndex)}
                           onMouseUp={finalizeSelection}
+                          onDragOver={(event) => handleDragOver(event, day, slot)}
                           data-day={day}
                           data-slot={slot}
                         />
@@ -1107,6 +1262,12 @@ export default function App() {
                                 gridColumn: column,
                                 gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
                               }}
+                              draggable
+                              onDragStart={() => handleDragStart(entry, day)}
+                              onDragEnd={() => {
+                                setDragging(null);
+                                setDragTarget(null);
+                              }}
                             >
                               <div className="block-title">{entry["Course Code"]}</div>
                               {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
@@ -1116,6 +1277,25 @@ export default function App() {
                           );
                         });
                     })}
+                    {dragging && dragTarget && (
+                      <div
+                        className="block preview"
+                        style={{
+                          gridColumn: visibleDays.indexOf(dragTarget.day) + 2,
+                          gridRow: `${Math.max(
+                            1,
+                            slots.findIndex((slot) => slot >= dragTarget.startMinutes) + 1
+                          )} / ${Math.max(
+                            1,
+                            slots.findIndex((slot) => slot >= dragTarget.startMinutes) +
+                              Math.ceil(dragging.duration / interval) +
+                              1
+                          )}`,
+                        }}
+                      >
+                        <div className="block-title">{dragging.entry["Course Code"]}</div>
+                      </div>
+                    )}
                   </div>
                 </>
               )}

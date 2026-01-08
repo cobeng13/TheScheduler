@@ -222,6 +222,23 @@ body {
   cursor: not-allowed;
 }
 
+.zoom-controls {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #f9fbfd;
+  border: 1px solid #cdd6e3;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
 .timetable-empty {
   text-align: center;
   color: #5b6b85;
@@ -279,11 +296,20 @@ body {
   color: #fff;
   z-index: 1;
   overflow: hidden;
+  cursor: grab;
 }
 
 .block.conflict {
   border: 2px solid #ff3d3d;
   background: rgba(220, 80, 80, 0.85);
+}
+
+.block.preview {
+  background: rgba(46, 115, 206, 0.35);
+  border: 1px dashed #2f5fa7;
+  color: transparent;
+  pointer-events: none;
+  cursor: grabbing;
 }
 
 .block-title {
