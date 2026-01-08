@@ -38,6 +38,78 @@ body {
   border-radius: 6px;
 }
 
+.rules-group {
+  min-width: 220px;
+  max-width: 260px;
+}
+
+.rules-group input[type="text"],
+.rules-group input:not([type]) {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.rule-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #2f3b52;
+}
+
+.rule-section {
+  border-top: 1px solid #d7dee9;
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rule-subtitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #3b4a63;
+}
+
+.rule-input {
+  display: flex;
+  gap: 6px;
+}
+
+.rule-input button {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #ccd3df;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.chip button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: #3b4a63;
+}
+
 .ribbon-title {
   font-weight: 600;
   font-size: 0.9rem;

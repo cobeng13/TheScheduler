@@ -115,8 +115,28 @@ def create_room(payload: schemas.NamedEntityCreate, db: Session = Depends(get_db
 
 
 @app.get("/conflicts", response_model=schemas.ConflictReport)
-def list_conflicts(db: Session = Depends(get_db)):
-    conflicts_list = conflicts.find_conflicts(db)
+def list_conflicts(
+    ignore_faculty: bool = False,
+    ignore_room: bool = False,
+    ignore_tba: bool = False,
+    ignore_faculty_list: str | None = None,
+    ignore_room_list: str | None = None,
+    contains_faculty: bool = False,
+    contains_room: bool = False,
+    db: Session = Depends(get_db),
+):
+    faculty_list = ignore_faculty_list.split(",") if ignore_faculty_list else []
+    room_list = ignore_room_list.split(",") if ignore_room_list else []
+    conflicts_list = conflicts.find_conflicts(
+        db,
+        ignore_faculty=ignore_faculty,
+        ignore_room=ignore_room,
+        ignore_tba=ignore_tba,
+        ignore_faculty_list=faculty_list,
+        ignore_room_list=room_list,
+        contains_faculty=contains_faculty,
+        contains_room=contains_room,
+    )
     grouped = {}
     for conflict in conflicts_list:
         grouped.setdefault((conflict["entry_id"], conflict["conflict_type"]), []).append(

@@ -259,6 +259,15 @@ export default function App() {
   const [formEditId, setFormEditId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [ignoreFaculty, setIgnoreFaculty] = useState(false);
+  const [ignoreRoom, setIgnoreRoom] = useState(false);
+  const [ignoreTba, setIgnoreTba] = useState(false);
+  const [ignoreFacultyList, setIgnoreFacultyList] = useState<string[]>([]);
+  const [ignoreRoomList, setIgnoreRoomList] = useState<string[]>([]);
+  const [containsFaculty, setContainsFaculty] = useState(false);
+  const [containsRoom, setContainsRoom] = useState(false);
+  const [facultyInput, setFacultyInput] = useState("");
+  const [roomInput, setRoomInput] = useState("");
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
@@ -267,6 +276,13 @@ export default function App() {
     const storedProgram = localStorage.getItem("lastProgram");
     const storedSection = localStorage.getItem("lastSection");
     const storedZoom = localStorage.getItem("timetableZoom");
+    const storedIgnoreFaculty = localStorage.getItem("rulesIgnoreFaculty");
+    const storedIgnoreRoom = localStorage.getItem("rulesIgnoreRoom");
+    const storedIgnoreTba = localStorage.getItem("rulesIgnoreTba");
+    const storedIgnoreFacultyList = localStorage.getItem("rulesIgnoreFacultyList");
+    const storedIgnoreRoomList = localStorage.getItem("rulesIgnoreRoomList");
+    const storedContainsFaculty = localStorage.getItem("rulesContainsFaculty");
+    const storedContainsRoom = localStorage.getItem("rulesContainsRoom");
     setScheduleForm((prev) => ({
       ...prev,
       Program: storedProgram ?? prev.Program,
@@ -278,22 +294,58 @@ export default function App() {
         setZoomPercent(parsed);
       }
     }
+    if (storedIgnoreFaculty) {
+      setIgnoreFaculty(storedIgnoreFaculty === "true");
+    }
+    if (storedIgnoreRoom) {
+      setIgnoreRoom(storedIgnoreRoom === "true");
+    }
+    if (storedIgnoreTba) {
+      setIgnoreTba(storedIgnoreTba === "true");
+    }
+    if (storedIgnoreFacultyList) {
+      setIgnoreFacultyList(storedIgnoreFacultyList.split("|").filter(Boolean));
+    }
+    if (storedIgnoreRoomList) {
+      setIgnoreRoomList(storedIgnoreRoomList.split("|").filter(Boolean));
+    }
+    if (storedContainsFaculty) {
+      setContainsFaculty(storedContainsFaculty === "true");
+    }
+    if (storedContainsRoom) {
+      setContainsRoom(storedContainsRoom === "true");
+    }
   }, []);
 
+  const fetchConflicts = async () => {
+    const params = new URLSearchParams();
+    params.set("ignore_faculty", String(ignoreFaculty));
+    params.set("ignore_room", String(ignoreRoom));
+    params.set("ignore_tba", String(ignoreTba));
+    if (ignoreFacultyList.length > 0) {
+      params.set("ignore_faculty_list", ignoreFacultyList.join(","));
+    }
+    if (ignoreRoomList.length > 0) {
+      params.set("ignore_room_list", ignoreRoomList.join(","));
+    }
+    params.set("contains_faculty", String(containsFaculty));
+    params.set("contains_room", String(containsRoom));
+    const conflictsRes = await fetch(`${API_BASE}/conflicts?${params.toString()}`);
+    setConflicts(await conflictsRes.json());
+  };
+
   const refreshAll = async () => {
-    const [scheduleRes, sectionsRes, facultyRes, roomsRes, conflictsRes] =
-      await Promise.all([
-        fetch(`${API_BASE}/schedule`),
-        fetch(`${API_BASE}/sections`),
-        fetch(`${API_BASE}/faculty`),
-        fetch(`${API_BASE}/rooms`),
-        fetch(`${API_BASE}/conflicts`),
-      ]);
+    const [scheduleRes, sectionsRes, facultyRes, roomsRes] = await Promise.all([
+      fetch(`${API_BASE}/schedule`),
+      fetch(`${API_BASE}/sections`),
+      fetch(`${API_BASE}/faculty`),
+      fetch(`${API_BASE}/rooms`),
+    ]);
     setEntries(await scheduleRes.json());
     setSections(await sectionsRes.json());
     setFaculty(await facultyRes.json());
     setRooms(await roomsRes.json());
-    setConflicts(await conflictsRes.json());
+    await fetchConflicts();
     if (currentViewConfig.selected && viewMode.startsWith("timetable")) {
       await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
     }
@@ -302,6 +354,25 @@ export default function App() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("rulesIgnoreFaculty", String(ignoreFaculty));
+    localStorage.setItem("rulesIgnoreRoom", String(ignoreRoom));
+    localStorage.setItem("rulesIgnoreTba", String(ignoreTba));
+    localStorage.setItem("rulesIgnoreFacultyList", ignoreFacultyList.join("|"));
+    localStorage.setItem("rulesIgnoreRoomList", ignoreRoomList.join("|"));
+    localStorage.setItem("rulesContainsFaculty", String(containsFaculty));
+    localStorage.setItem("rulesContainsRoom", String(containsRoom));
+    fetchConflicts();
+  }, [
+    ignoreFaculty,
+    ignoreRoom,
+    ignoreTba,
+    ignoreFacultyList,
+    ignoreRoomList,
+    containsFaculty,
+    containsRoom,
+  ]);
 
   const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
     if (!mode.startsWith("timetable") || !selectionName) {
@@ -1087,6 +1158,119 @@ export default function App() {
             <button onClick={exportTimetablePng} disabled={!canExportTimetable || isExporting}>
               Export Timetable (PNG)
             </button>
+          </div>
+          <div className="ribbon-group rules-group">
+            <div className="ribbon-title">Rules</div>
+            <label className="rule-option">
+              <input
+                type="checkbox"
+                checked={ignoreFaculty}
+                onChange={(event) => setIgnoreFaculty(event.target.checked)}
+              />
+              Ignore faculty conflicts
+            </label>
+            <label className="rule-option">
+              <input
+                type="checkbox"
+                checked={ignoreRoom}
+                onChange={(event) => setIgnoreRoom(event.target.checked)}
+              />
+              Ignore room conflicts
+            </label>
+            <label className="rule-option">
+              <input
+                type="checkbox"
+                checked={ignoreTba}
+                onChange={(event) => setIgnoreTba(event.target.checked)}
+              />
+              Ignore TBA time/day
+            </label>
+            <div className="rule-section">
+              <div className="rule-subtitle">Ignore specific Faculty</div>
+              <div className="rule-input">
+                <input
+                  value={facultyInput}
+                  onChange={(event) => setFacultyInput(event.target.value)}
+                  placeholder="Faculty name"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!facultyInput.trim()) return;
+                    setIgnoreFacultyList((prev) => [...prev, facultyInput.trim()]);
+                    setFacultyInput("");
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+              <label className="rule-option">
+                <input
+                  type="checkbox"
+                  checked={containsFaculty}
+                  onChange={(event) => setContainsFaculty(event.target.checked)}
+                />
+                Contains match
+              </label>
+              <div className="chips">
+                {ignoreFacultyList.map((item) => (
+                  <span key={item} className="chip">
+                    {item}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setIgnoreFacultyList((prev) => prev.filter((value) => value !== item))
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="rule-section">
+              <div className="rule-subtitle">Ignore specific Rooms</div>
+              <div className="rule-input">
+                <input
+                  value={roomInput}
+                  onChange={(event) => setRoomInput(event.target.value)}
+                  placeholder="Room name"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!roomInput.trim()) return;
+                    setIgnoreRoomList((prev) => [...prev, roomInput.trim()]);
+                    setRoomInput("");
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+              <label className="rule-option">
+                <input
+                  type="checkbox"
+                  checked={containsRoom}
+                  onChange={(event) => setContainsRoom(event.target.checked)}
+                />
+                Contains match
+              </label>
+              <div className="chips">
+                {ignoreRoomList.map((item) => (
+                  <span key={item} className="chip">
+                    {item}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setIgnoreRoomList((prev) => prev.filter((value) => value !== item))
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
         <div className="ribbon-conflicts">
