@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import shutil
+from pathlib import Path
+from uuid import uuid4
 from typing import List
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -364,3 +367,32 @@ def reset_database(db: Session = Depends(get_db)):
     models.Base.metadata.drop_all(bind=engine)
     models.Base.metadata.create_all(bind=engine)
     return {"ok": True}
+
+
+@app.post("/export/png")
+def export_png(payload: dict):
+    category = payload.get("category")
+    name = payload.get("name")
+    png_base64 = payload.get("png_base64")
+    batch_id = payload.get("batch_id") or uuid4().hex
+    if category not in {"faculty", "section", "room"}:
+        raise HTTPException(status_code=400, detail="Invalid category")
+    if not name or not png_base64:
+        raise HTTPException(status_code=400, detail="Missing export data")
+    if "," in png_base64:
+        png_base64 = png_base64.split(",", 1)[1]
+    try:
+        data = base64.b64decode(png_base64)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid PNG payload") from exc
+
+    folder_map = {
+        "faculty": "Timetables_Faculty",
+        "section": "Timetables_Section",
+        "room": "Timetables_Room",
+    }
+    base_dir = Path.cwd() / "exports" / batch_id / folder_map[category]
+    base_dir.mkdir(parents=True, exist_ok=True)
+    file_path = base_dir / f"{name}.png"
+    file_path.write_bytes(data)
+    return {"ok": True, "path": str(file_path)}
