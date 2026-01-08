@@ -256,18 +256,60 @@ body {
 }
 
 .color-input input {
+  height: 30px;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.hex-input {
   width: 120px;
   padding: 4px 6px;
   border: 1px solid #ccd3df;
   border-radius: 4px;
 }
 
-.color-swatch {
+.palette-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.palette-swatch {
   width: 22px;
   height: 22px;
-  border: 1px solid #c6d0dd;
   border-radius: 4px;
-  display: inline-block;
+  border: 1px solid #c6d0dd;
+  cursor: pointer;
+  padding: 0;
+}
+
+.advanced-toggle {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: #2f5fa7;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+}
+
+.advanced-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advanced-controls label {
+  display: grid;
+  grid-template-columns: 60px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.advanced-controls input[type="range"] {
+  width: 100%;
 }
 
 .modal h3 {

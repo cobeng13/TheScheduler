@@ -184,6 +184,87 @@ const getReadableTextColor = (hex: string) => {
 
 const isValidHex = (value: string) => /^#?[0-9a-fA-F]{6}$/.test(value.trim());
 
+const normalizeHex = (value: string) => {
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (!isValidHex(trimmed)) return "";
+  return trimmed.startsWith("#") ? trimmed.toUpperCase() : `#${trimmed.toUpperCase()}`;
+};
+
+const hexToRgb = (hex: string) => {
+  const cleaned = normalizeHex(hex).replace("#", "");
+  if (cleaned.length !== 6) return null;
+  const r = parseInt(cleaned.slice(0, 2), 16);
+  const g = parseInt(cleaned.slice(2, 4), 16);
+  const b = parseInt(cleaned.slice(4, 6), 16);
+  return { r, g, b };
+};
+
+const rgbToHex = (r: number, g: number, b: number) =>
+  `#${[r, g, b]
+    .map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+
+const hashString = (value: string) => {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) % 360;
+  }
+  return hash;
+};
+
+const hslToHex = (hue: number, saturation: number, lightness: number) => {
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hue < 60) {
+    r = c;
+    g = x;
+  } else if (hue < 120) {
+    r = x;
+    g = c;
+  } else if (hue < 180) {
+    g = c;
+    b = x;
+  } else if (hue < 240) {
+    g = x;
+    b = c;
+  } else if (hue < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+  const toHex = (value: number) =>
+    Math.round((value + m) * 255)
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
+const colorPalette = [
+  "#4A90E2",
+  "#50E3C2",
+  "#F5A623",
+  "#BD10E0",
+  "#7ED321",
+  "#D0021B",
+  "#9013FE",
+  "#8B572A",
+  "#417505",
+  "#B8E986",
+  "#F8E71C",
+  "#4A4A4A",
+];
+
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -335,8 +416,12 @@ export default function App() {
   const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
   const [selectedFacultyColor, setSelectedFacultyColor] = useState("");
   const [facultyColorInput, setFacultyColorInput] = useState("");
+  const [facultyRgb, setFacultyRgb] = useState({ r: 0, g: 0, b: 0 });
+  const [showFacultyAdvanced, setShowFacultyAdvanced] = useState(false);
   const [selectedSectionColor, setSelectedSectionColor] = useState("");
   const [sectionColorInput, setSectionColorInput] = useState("");
+  const [sectionRgb, setSectionRgb] = useState({ r: 0, g: 0, b: 0 });
+  const [showSectionAdvanced, setShowSectionAdvanced] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
@@ -556,6 +641,18 @@ export default function App() {
     if (!selectedSectionColor) return;
     setSectionColorInput(customizeSettings.sectionBgColors[selectedSectionColor] ?? "");
   }, [selectedSectionColor, customizeSettings.sectionBgColors]);
+
+  useEffect(() => {
+    const rgb = hexToRgb(facultyColorInput);
+    if (!rgb) return;
+    setFacultyRgb(rgb);
+  }, [facultyColorInput]);
+
+  useEffect(() => {
+    const rgb = hexToRgb(sectionColorInput);
+    if (!rgb) return;
+    setSectionRgb(rgb);
+  }, [sectionColorInput]);
 
   const currentViewConfig = useMemo(() => {
     if (viewMode === "timetable-section") {
@@ -1257,10 +1354,8 @@ export default function App() {
   };
 
   const handleSaveFacultyColor = () => {
-    if (!selectedFacultyColor || !isValidHex(facultyColorInput)) return;
-    const normalized = facultyColorInput.startsWith("#")
-      ? facultyColorInput
-      : `#${facultyColorInput}`;
+    const normalized = normalizeHex(facultyColorInput);
+    if (!selectedFacultyColor || !normalized) return;
     setCustomizeSettings((prev) => ({
       ...prev,
       facultyColors: {
@@ -1280,10 +1375,8 @@ export default function App() {
   };
 
   const handleSaveSectionColor = () => {
-    if (!selectedSectionColor || !isValidHex(sectionColorInput)) return;
-    const normalized = sectionColorInput.startsWith("#")
-      ? sectionColorInput
-      : `#${sectionColorInput}`;
+    const normalized = normalizeHex(sectionColorInput);
+    if (!selectedSectionColor || !normalized) return;
     setCustomizeSettings((prev) => ({
       ...prev,
       sectionBgColors: {
@@ -1300,6 +1393,34 @@ export default function App() {
       delete next[selectedSectionColor];
       return { ...prev, sectionBgColors: next };
     });
+  };
+
+  const handleAutoAssignFacultyColors = () => {
+    if (facultyOptions.length === 0) return;
+    const colors: Record<string, string> = {};
+    facultyOptions.forEach((item) => {
+      const hue = hashString(item.name);
+      const saturation = 65;
+      const lightness = 55;
+      colors[item.name] = hslToHex(hue, saturation, lightness);
+    });
+    setCustomizeSettings((prev) => ({
+      ...prev,
+      blockDisplay: { ...prev.blockDisplay, useFacultyColors: true },
+      facultyColors: colors,
+    }));
+  };
+
+  const handleFacultyRgbChange = (channel: "r" | "g" | "b", value: number) => {
+    const next = { ...facultyRgb, [channel]: value };
+    setFacultyRgb(next);
+    setFacultyColorInput(rgbToHex(next.r, next.g, next.b));
+  };
+
+  const handleSectionRgbChange = (channel: "r" | "g" | "b", value: number) => {
+    const next = { ...sectionRgb, [channel]: value };
+    setSectionRgb(next);
+    setSectionColorInput(rgbToHex(next.r, next.g, next.b));
   };
 
   const handleExport = async (path: string, filename: string) => {
@@ -1337,6 +1458,8 @@ export default function App() {
     viewMode === "timetable-section"
       ? customizeSettings.sectionBgColors[effectiveSelection]
       : undefined;
+  const facultyPickerValue = normalizeHex(facultyColorInput) || colorPalette[0];
+  const sectionPickerValue = normalizeHex(sectionColorInput) || colorPalette[0];
 
   const conflictDetails = useMemo(() => {
     const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
@@ -1810,28 +1933,88 @@ export default function App() {
                 </select>
                 <div className="color-input">
                   <input
+                    type="color"
+                    value={facultyPickerValue}
+                    onChange={(event) => setFacultyColorInput(event.target.value)}
+                  />
+                  <input
+                    className="hex-input"
                     value={facultyColorInput}
                     onChange={(event) => setFacultyColorInput(event.target.value)}
                     placeholder="#RRGGBB"
                   />
-                  <span
-                    className="color-swatch"
-                    style={{
-                      backgroundColor: isValidHex(facultyColorInput)
-                        ? facultyColorInput.startsWith("#")
-                          ? facultyColorInput
-                          : `#${facultyColorInput}`
-                        : "#ffffff",
-                    }}
-                  />
                 </div>
               </div>
+              <div className="palette-row">
+                {colorPalette.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className="palette-swatch"
+                    style={{ backgroundColor: color }}
+                    onClick={() => setFacultyColorInput(color)}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                className="advanced-toggle"
+                onClick={() => setShowFacultyAdvanced((prev) => !prev)}
+              >
+                {showFacultyAdvanced ? "Hide advanced controls" : "Show advanced controls"}
+              </button>
+              {showFacultyAdvanced ? (
+                <div className="advanced-controls">
+                  <label>
+                    Red
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={facultyRgb.r}
+                      onChange={(event) =>
+                        handleFacultyRgbChange("r", Number(event.target.value))
+                      }
+                    />
+                    <span>{facultyRgb.r}</span>
+                  </label>
+                  <label>
+                    Green
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={facultyRgb.g}
+                      onChange={(event) =>
+                        handleFacultyRgbChange("g", Number(event.target.value))
+                      }
+                    />
+                    <span>{facultyRgb.g}</span>
+                  </label>
+                  <label>
+                    Blue
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={facultyRgb.b}
+                      onChange={(event) =>
+                        handleFacultyRgbChange("b", Number(event.target.value))
+                      }
+                    />
+                    <span>{facultyRgb.b}</span>
+                  </label>
+                </div>
+              ) : null}
               <div className="modal-actions">
                 <button type="button" onClick={handleSaveFacultyColor}>
                   Save Color
                 </button>
                 <button type="button" onClick={handleClearFacultyColor}>
                   Clear Color
+                </button>
+                <button type="button" onClick={handleAutoAssignFacultyColors}>
+                  Auto-assign colors for all faculty
                 </button>
               </div>
             </div>
@@ -1850,22 +2033,79 @@ export default function App() {
                 </select>
                 <div className="color-input">
                   <input
+                    type="color"
+                    value={sectionPickerValue}
+                    onChange={(event) => setSectionColorInput(event.target.value)}
+                  />
+                  <input
+                    className="hex-input"
                     value={sectionColorInput}
                     onChange={(event) => setSectionColorInput(event.target.value)}
                     placeholder="#RRGGBB"
                   />
-                  <span
-                    className="color-swatch"
-                    style={{
-                      backgroundColor: isValidHex(sectionColorInput)
-                        ? sectionColorInput.startsWith("#")
-                          ? sectionColorInput
-                          : `#${sectionColorInput}`
-                        : "#ffffff",
-                    }}
-                  />
                 </div>
               </div>
+              <div className="palette-row">
+                {colorPalette.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className="palette-swatch"
+                    style={{ backgroundColor: color }}
+                    onClick={() => setSectionColorInput(color)}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                className="advanced-toggle"
+                onClick={() => setShowSectionAdvanced((prev) => !prev)}
+              >
+                {showSectionAdvanced ? "Hide advanced controls" : "Show advanced controls"}
+              </button>
+              {showSectionAdvanced ? (
+                <div className="advanced-controls">
+                  <label>
+                    Red
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={sectionRgb.r}
+                      onChange={(event) =>
+                        handleSectionRgbChange("r", Number(event.target.value))
+                      }
+                    />
+                    <span>{sectionRgb.r}</span>
+                  </label>
+                  <label>
+                    Green
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={sectionRgb.g}
+                      onChange={(event) =>
+                        handleSectionRgbChange("g", Number(event.target.value))
+                      }
+                    />
+                    <span>{sectionRgb.g}</span>
+                  </label>
+                  <label>
+                    Blue
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      value={sectionRgb.b}
+                      onChange={(event) =>
+                        handleSectionRgbChange("b", Number(event.target.value))
+                      }
+                    />
+                    <span>{sectionRgb.b}</span>
+                  </label>
+                </div>
+              ) : null}
               <div className="modal-actions">
                 <button type="button" onClick={handleSaveSectionColor}>
                   Save Background
