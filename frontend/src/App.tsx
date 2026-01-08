@@ -393,6 +393,9 @@ export default function App() {
   const [formEditId, setFormEditId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportSections, setExportSections] = useState(false);
+  const [exportFaculty, setExportFaculty] = useState(false);
+  const [exportRooms, setExportRooms] = useState(false);
   const [ignoreFaculty, setIgnoreFaculty] = useState(false);
   const [ignoreRoom, setIgnoreRoom] = useState(false);
   const [ignoreTba, setIgnoreTba] = useState(false);
@@ -1069,10 +1072,17 @@ export default function App() {
     setIsSaving(false);
   };
 
-  const exportTimetablePng = async () => {
-    if (!timetableRef.current || !currentViewConfig.selected) return;
-    if (isExporting) return;
-    setIsExporting(true);
+  const exportTimetablePng = async (
+    selectionOverride?: string,
+    modeOverride?: ViewMode,
+    force = false
+  ) => {
+    const selectionName = selectionOverride ?? currentViewConfig.selected;
+    if (!timetableRef.current || !selectionName) return;
+    if (isExporting && !force) return;
+    if (!force) {
+      setIsExporting(true);
+    }
     setToast({ message: "Exporting PNG...", showRevert: false });
     const container = timetableRef.current;
     const previousHeight = container.style.height;
@@ -1083,8 +1093,8 @@ export default function App() {
     container.style.height = previousHeight;
     container.style.overflow = previousOverflow;
     const link = document.createElement("a");
-    const modeLabel = viewMode.split("-")[1] ?? "timetable";
-    const safeName = currentViewConfig.selected
+    const modeLabel = (modeOverride ?? viewMode).split("-")[1] ?? "timetable";
+    const safeName = selectionName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/(^_|_$)/g, "");
@@ -1092,6 +1102,59 @@ export default function App() {
     link.href = canvas.toDataURL("image/png");
     link.click();
     setToast({ message: "Exported", showRevert: false });
+    if (!force) {
+      setIsExporting(false);
+    }
+  };
+
+  const exportTimetablePngFor = async (selectionName: string, mode: ViewMode) => {
+    if (!timetableRef.current) return;
+    const previousMode = viewMode;
+    const previousSelection = currentViewConfig.selected;
+    setViewMode(mode);
+    if (mode === "timetable-section") {
+      setSelectedSection(selectionName);
+    } else if (mode === "timetable-faculty") {
+      setSelectedFaculty(selectionName);
+    } else if (mode === "timetable-room") {
+      setSelectedRoom(selectionName);
+    }
+    await fetchTimetableForSelection(selectionName, mode);
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await exportTimetablePng(selectionName, mode, true);
+    setViewMode(previousMode);
+    if (previousMode === "timetable-section") {
+      setSelectedSection(previousSelection);
+    } else if (previousMode === "timetable-faculty") {
+      setSelectedFaculty(previousSelection);
+    } else if (previousMode === "timetable-room") {
+      setSelectedRoom(previousSelection);
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    const tasks: Array<Promise<void>> = [];
+    if (exportSections) {
+      for (const section of sectionOptions) {
+        tasks.push(exportTimetablePngFor(section.name, "timetable-section"));
+      }
+    }
+    if (exportFaculty) {
+      for (const item of facultyOptions) {
+        tasks.push(exportTimetablePngFor(item.name, "timetable-faculty"));
+      }
+    }
+    if (exportRooms) {
+      for (const item of roomOptions) {
+        tasks.push(exportTimetablePngFor(item.name, "timetable-room"));
+      }
+    }
+    for (const task of tasks) {
+      await task;
+    }
     setIsExporting(false);
   };
 
@@ -1617,6 +1680,39 @@ export default function App() {
                     type="button"
                   >
                     Export Timetable (PNG)
+                  </button>
+                  <div className="menu-divider" />
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={exportSections}
+                      onChange={(event) => setExportSections(event.target.checked)}
+                    />
+                    Export per class
+                  </label>
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={exportFaculty}
+                      onChange={(event) => setExportFaculty(event.target.checked)}
+                    />
+                    Export per faculty
+                  </label>
+                  <label className="menu-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={exportRooms}
+                      onChange={(event) => setExportRooms(event.target.checked)}
+                    />
+                    Export per room
+                  </label>
+                  <button
+                    className="menu-item"
+                    onClick={handleBatchExport}
+                    disabled={isExporting || (!exportSections && !exportFaculty && !exportRooms)}
+                    type="button"
+                  >
+                    Export selected PNGs
                   </button>
                 </div>
               ) : null}
