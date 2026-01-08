@@ -20,7 +20,7 @@ def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.Sch
         hours=entry.hours,
         time_lpu=entry.time_lpu,
         time_24=time_24,
-        days=entry.days,
+        days=time_utils.normalize_days_string(entry.days),
         room=entry.room,
         faculty=entry.faculty,
         start_minutes=start_minutes,
@@ -49,7 +49,7 @@ def update_schedule_entry(
     model.hours = entry.hours
     model.time_lpu = entry.time_lpu
     model.time_24 = time_24
-    model.days = entry.days
+    model.days = time_utils.normalize_days_string(entry.days)
     model.room = entry.room
     model.faculty = entry.faculty
     model.start_minutes = start_minutes

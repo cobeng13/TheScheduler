@@ -49,15 +49,16 @@ const canonicalHeaders = [
   "Faculty",
 ] as const;
 
-const daysOfWeek = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
+const daysOfWeek = ["M", "T", "W", "Th", "F", "Sa", "Su"];
+const dayLabels: Record<string, string> = {
+  M: "Monday",
+  T: "Tuesday",
+  W: "Wednesday",
+  Th: "Thursday",
+  F: "Friday",
+  Sa: "Saturday",
+  Su: "Sunday",
+};
 
 const formatMinutes = (minutes: number) => {
   const hours = Math.floor(minutes / 60);
@@ -81,7 +82,7 @@ const overlap = (startA: number, endA: number, startB: number, endB: number) =>
   startA < endB && startB < endA;
 
 const splitDays = (days: string) =>
-  days
+  normalizeDays(days)
     .split(",")
     .map((day) => day.trim())
     .filter(Boolean);
@@ -132,6 +133,52 @@ const downloadBlob = (blob: Blob, filename: string) => {
 const sortEntities = (items: NamedEntity[]) =>
   [...items].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
+const normalizeDays = (value: string) => {
+  if (!value) return "";
+  const aliasMap: Record<string, string> = {
+    m: "M",
+    mon: "M",
+    monday: "M",
+    t: "T",
+    tu: "T",
+    tue: "T",
+    tues: "T",
+    tuesday: "T",
+    w: "W",
+    wed: "W",
+    weds: "W",
+    wednesday: "W",
+    th: "Th",
+    thu: "Th",
+    thur: "Th",
+    thurs: "Th",
+    thursday: "Th",
+    f: "F",
+    fri: "F",
+    friday: "F",
+    sa: "Sa",
+    sat: "Sa",
+    saturday: "Sa",
+    su: "Su",
+    sun: "Su",
+    sunday: "Su",
+  };
+  const cleaned = value.replace("/", ",").replace(/\s+/g, ",");
+  const parts = cleaned.split(",").filter(Boolean);
+  const tokens: string[] =
+    parts.length === 1 && parts[0].length > 2 && /^[a-z]+$/i.test(parts[0])
+      ? parts[0]
+          .replace(/th/gi, "Th,")
+          .replace(/sa/gi, "Sa,")
+          .replace(/su/gi, "Su,")
+          .split(",")
+          .filter(Boolean)
+          .map((part) => aliasMap[part.toLowerCase()] ?? part)
+      : parts.map((part) => aliasMap[part.toLowerCase()] ?? part);
+  const canonical = tokens.filter((token) => dayLabels[token]);
+  return canonical.join(",");
+};
+
 export default function App() {
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [sections, setSections] = useState<NamedEntity[]>([]);
@@ -142,6 +189,12 @@ export default function App() {
   const [showSunday, setShowSunday] = useState(false);
   const [useQuarterHours, setUseQuarterHours] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
+  const [selectionEnd, setSelectionEnd] = useState<Selection>(null);
+  const [lastSelection, setLastSelection] = useState<{
+    day: string;
+    startMinutes: number;
+    endMinutes: number;
+  } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
@@ -176,6 +229,9 @@ export default function App() {
   const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
   const [editError, setEditError] = useState("");
   const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionOrigin, setSelectionOrigin] = useState<{ day: string; index: number } | null>(
+    null
+  );
   const [zoomPercent, setZoomPercent] = useState(100);
 
   useEffect(() => {
@@ -294,6 +350,32 @@ export default function App() {
       .then((data) => setTimetableEntries(data));
   }, [viewMode, currentViewConfig.selected]);
 
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLastSelection(null);
+        setSelection(null);
+        setSelectionEnd(null);
+        setSelectionOrigin(null);
+      }
+    };
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest(".timetable")) {
+        setLastSelection(null);
+        setSelection(null);
+        setSelectionEnd(null);
+        setSelectionOrigin(null);
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, []);
+
   const conflictSet = useMemo(() => {
     const set = new Set<number>();
     conflicts.conflicts.forEach((conflict) => set.add(conflict.entry_id));
@@ -318,8 +400,11 @@ export default function App() {
     return list;
   }, [interval]);
 
-  const handleSelectStart = (day: string, index: number) => {
+  const handleSelectStart = (event: React.MouseEvent, day: string, index: number) => {
+    if (event.button !== 0) return;
     setSelection({ day, startIndex: index, endIndex: index });
+    setSelectionEnd({ day, startIndex: index, endIndex: index });
+    setSelectionOrigin({ day, index });
     setContextMenu(null);
     setIsSelecting(true);
   };
@@ -329,39 +414,73 @@ export default function App() {
     if (selection.day !== day) {
       return;
     }
-    setSelection({
-      ...selection,
-      endIndex: index,
-    });
+    setSelectionEnd({ day, startIndex: selection.startIndex, endIndex: index });
   };
 
-  const selectionRange = useMemo(() => {
-    if (!selection) return null;
-    const startIndex = Math.min(selection.startIndex, selection.endIndex);
-    const endIndex = Math.max(selection.startIndex, selection.endIndex) + 1;
+  const finalizeSelection = () => {
+    if (!selection || !selectionEnd || !selectionOrigin) {
+      setIsSelecting(false);
+      return;
+    }
+    const startIndex = Math.min(selectionOrigin.index, selectionEnd.endIndex);
+    const endIndex = Math.max(selectionOrigin.index, selectionEnd.endIndex) + 1;
     const startMinutes = slots[startIndex];
     const endMinutes = slots[endIndex] ?? slots[slots.length - 1] + interval;
-    return {
+    setLastSelection({
       day: selection.day,
       startMinutes,
       endMinutes,
-    };
-  }, [selection, slots, interval]);
+    });
+    setIsSelecting(false);
+    setSelectionOrigin(null);
+  };
+
+  const selectionRange = useMemo(() => {
+    if (isSelecting && selectionOrigin && selectionEnd) {
+      const startIndex = Math.min(selectionOrigin.index, selectionEnd.endIndex);
+      const endIndex = Math.max(selectionOrigin.index, selectionEnd.endIndex) + 1;
+      const startMinutes = slots[startIndex];
+      const endMinutes = slots[endIndex] ?? slots[slots.length - 1] + interval;
+      return {
+        day: selectionOrigin.day,
+        startMinutes,
+        endMinutes,
+      };
+    }
+    return lastSelection;
+  }, [isSelecting, selectionOrigin, selectionEnd, lastSelection, slots, interval]);
 
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
     const target = event.target as HTMLElement | null;
     const cell = target?.closest<HTMLElement>("[data-day][data-slot]");
-    if (!selectionRange || !cell) return;
+    const inGrid = Boolean(target?.closest(".timetable-grid"));
+    if (selectionRange) {
+      if (inGrid) {
+        if (!cell) {
+          setContextMenu({ x: event.clientX, y: event.clientY });
+          return;
+        }
+        const day = cell.dataset.day ?? "";
+        const slot = Number(cell.dataset.slot ?? 0);
+        if (
+          selectionRange.day === day &&
+          slot >= selectionRange.startMinutes &&
+          slot < selectionRange.endMinutes
+        ) {
+          setContextMenu({ x: event.clientX, y: event.clientY });
+        }
+        return;
+      }
+      setContextMenu({ x: event.clientX, y: event.clientY });
+      return;
+    }
+    if (!cell) return;
     const day = cell.dataset.day ?? "";
     const slot = Number(cell.dataset.slot ?? 0);
-    if (
-      selectionRange.day === day &&
-      slot >= selectionRange.startMinutes &&
-      slot < selectionRange.endMinutes
-    ) {
-      setContextMenu({ x: event.clientX, y: event.clientY });
-    }
+    const endMinutes = slot + interval;
+    setLastSelection({ day, startMinutes: slot, endMinutes });
+    setContextMenu({ x: event.clientX, y: event.clientY });
   };
 
   const applySelectionToForm = () => {
@@ -408,6 +527,11 @@ export default function App() {
       "Days",
       "Time (24 Hrs)",
     ];
+    const normalizedDays = normalizeDays(scheduleForm.Days);
+    if (!normalizedDays) {
+      setFormError("Invalid Days. Example: M,W,F");
+      return;
+    }
     const missing = requiredFields.filter((field) => !scheduleForm[field]);
     if (missing.length > 0) {
       setFormError(`Missing required fields: ${missing.join(", ")}`);
@@ -420,6 +544,7 @@ export default function App() {
 
     const payload = {
       ...scheduleForm,
+      Days: normalizedDays,
       "Time (LPU Std)":
         scheduleForm["Time (LPU Std)"] || scheduleForm["Time (24 Hrs)"],
     };
@@ -440,6 +565,10 @@ export default function App() {
       Room: "",
       Faculty: "",
     }));
+    setLastSelection(null);
+    setSelection(null);
+    setSelectionEnd(null);
+    setSelectionOrigin(null);
     refreshAll();
   };
 
@@ -464,10 +593,16 @@ export default function App() {
         return;
       }
     }
+    const normalizedDays = normalizeDays(editEntry.Days);
+    if (!normalizedDays) {
+      setEditError("Invalid Days. Example: M,W,F");
+      return;
+    }
+    const payload = { ...editEntry, Days: normalizedDays };
     await fetch(`${API_BASE}/schedule/${editEntryId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editEntry),
+      body: JSON.stringify(payload),
     });
     setEditEntryId(null);
     setEditEntry(null);
@@ -499,11 +634,16 @@ export default function App() {
     if (!confirmed) return;
     await fetch(`${API_BASE}/file/reset`, { method: "POST" });
     setSelection(null);
+    setSelectionEnd(null);
     setContextMenu(null);
+    setSelectionOrigin(null);
     setSelectedSection("");
     setSelectedFaculty("");
     setSelectedRoom("");
     setTimetableEntries([]);
+    setLastSelection(null);
+    setSelectionEnd(null);
+    setSelectionOrigin(null);
     setScheduleForm({
       id: 0,
       "Program": "",
@@ -639,103 +779,103 @@ export default function App() {
   return (
     <div className="app">
       <div className="ribbon">
-        <div className="ribbon-group">
-          <div className="ribbon-title">File</div>
-          <button onClick={handleReset}>New Timetable</button>
-          <button onClick={handleExportDb}>Save</button>
-          <label className="file-input">
-            Open Timetable
-            <input type="file" onChange={handleImportDb} />
-          </label>
+        <div className="ribbon-groups">
+          <div className="ribbon-group">
+            <div className="ribbon-title">File</div>
+            <button onClick={handleReset}>New Timetable</button>
+            <button onClick={handleExportDb}>Save</button>
+            <label className="file-input">
+              Open Timetable
+              <input type="file" onChange={handleImportDb} />
+            </label>
+          </div>
+          <div className="ribbon-group">
+            <div className="ribbon-title">View</div>
+            <button onClick={() => setViewMode("text")}>Text View</button>
+            <button onClick={() => setViewMode("timetable-section")}>
+              Timetable: Per Section
+            </button>
+            <button onClick={() => setViewMode("timetable-faculty")}>
+              Timetable: Per Faculty
+            </button>
+            <button onClick={() => setViewMode("timetable-room")}>
+              Timetable: Per Room
+            </button>
+          </div>
+          <div className="ribbon-group">
+            <div className="ribbon-title">Export</div>
+            <button onClick={() => handleExport("/reports/text.csv", "text-view.csv")}>
+              Export Text View
+            </button>
+            <button onClick={() => handleExport("/reports/text.xlsx", "text-view.xlsx")}>
+              Export Text View (.xlsx)
+            </button>
+            <button
+              onClick={() =>
+                handleExport(
+                  `/reports/timetable/${timetableGroup}.csv?filter_value=${encodeURIComponent(
+                    effectiveSelection
+                  )}`,
+                  "timetable.csv"
+                )
+              }
+              disabled={!canExportTimetable}
+            >
+              Export Timetable View
+            </button>
+            <button
+              onClick={() =>
+                handleExport(
+                  `/reports/timetable/${timetableGroup}.xlsx?filter_value=${encodeURIComponent(
+                    effectiveSelection
+                  )}`,
+                  "timetable.xlsx"
+                )
+              }
+              disabled={!canExportTimetable}
+            >
+              Export Timetable View (.xlsx)
+            </button>
+          </div>
         </div>
-        <div className="ribbon-group">
-          <div className="ribbon-title">View</div>
-          <button onClick={() => setViewMode("text")}>Text View</button>
-          <button onClick={() => setViewMode("timetable-section")}>
-            Timetable: Per Section
-          </button>
-          <button onClick={() => setViewMode("timetable-faculty")}>
-            Timetable: Per Faculty
-          </button>
-          <button onClick={() => setViewMode("timetable-room")}>
-            Timetable: Per Room
-          </button>
-        </div>
-        <div className="ribbon-group">
-          <div className="ribbon-title">Export</div>
-          <button onClick={() => handleExport("/reports/text.csv", "text-view.csv")}>
-            Export Text View
-          </button>
-          <button onClick={() => handleExport("/reports/text.xlsx", "text-view.xlsx")}>
-            Export Text View (.xlsx)
-          </button>
-          <button
-            onClick={() =>
-              handleExport(
-                `/reports/timetable/${timetableGroup}.csv?filter_value=${encodeURIComponent(
-                  effectiveSelection
-                )}`,
-                "timetable.csv"
-              )
-            }
-            disabled={!canExportTimetable}
-          >
-            Export Timetable View
-          </button>
-          <button
-            onClick={() =>
-              handleExport(
-                `/reports/timetable/${timetableGroup}.xlsx?filter_value=${encodeURIComponent(
-                  effectiveSelection
-                )}`,
-                "timetable.xlsx"
-              )
-            }
-            disabled={!canExportTimetable}
-          >
-            Export Timetable View (.xlsx)
-          </button>
+        <div className="ribbon-conflicts">
+          <div className="ribbon-title">Conflicts</div>
+          {conflictDetails.length === 0 ? (
+            <p className="muted">No conflicts detected.</p>
+          ) : (
+            <ul className="conflict-list">
+              {conflictDetails.map((conflict, index) => (
+                <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
+                  <strong>{conflict?.type.toUpperCase()}</strong>:{" "}
+                  {conflict?.entry["Course Code"]} ({conflict?.entry.Section}) vs{" "}
+                      {conflict?.other["Course Code"]} ({conflict?.other.Section}) on{" "}
+                      {normalizeDays(conflict?.sharedDays.join(","))} at {conflict?.overlapTime}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
       <div className="content">
         <div className="main">
-          <div className="controls-row">
-            <div className="controls">
-              <label>
-                Show Sunday
-                <input
-                  type="checkbox"
-                  checked={showSunday}
-                  onChange={(event) => setShowSunday(event.target.checked)}
-                />
-              </label>
-              <label>
-                15-minute slots
-                <input
-                  type="checkbox"
-                  checked={useQuarterHours}
-                  onChange={(event) => setUseQuarterHours(event.target.checked)}
-                />
-              </label>
-            </div>
-            <div className="conflict-panel">
-              <div className="conflict-panel-title">Conflicts</div>
-              {conflictDetails.length === 0 ? (
-                <p className="muted">No conflicts detected.</p>
-              ) : (
-                <ul className="conflict-list">
-                  {conflictDetails.map((conflict, index) => (
-                    <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
-                      <strong>{conflict?.type.toUpperCase()}</strong>:{" "}
-                      {conflict?.entry["Course Code"]} ({conflict?.entry.Section}) vs{" "}
-                      {conflict?.other["Course Code"]} ({conflict?.other.Section}) on{" "}
-                      {conflict?.sharedDays.join(", ")} at {conflict?.overlapTime}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          <div className="controls">
+            <label>
+              Show Sunday
+              <input
+                type="checkbox"
+                checked={showSunday}
+                onChange={(event) => setShowSunday(event.target.checked)}
+              />
+            </label>
+            <label>
+              15-minute slots
+              <input
+                type="checkbox"
+                checked={useQuarterHours}
+                onChange={(event) => setUseQuarterHours(event.target.checked)}
+              />
+            </label>
           </div>
 
           {viewMode === "text" ? (
@@ -832,7 +972,7 @@ export default function App() {
               {editError && <p className="error">{editError}</p>}
             </div>
           ) : (
-            <div className="timetable" onContextMenu={handleContextMenu} onMouseUp={() => setIsSelecting(false)}>
+            <div className="timetable" onContextMenu={handleContextMenu} onMouseUp={finalizeSelection}>
               <div className="timetable-header">
                 <div className="timetable-header-left">
                   <button
@@ -900,7 +1040,7 @@ export default function App() {
                     <div className="time-header">Time</div>
                     {visibleDays.map((day) => (
                       <div key={day} className="day-header">
-                        {day}
+                        {dayLabels[day]}
                       </div>
                     ))}
                   </div>
@@ -936,16 +1076,16 @@ export default function App() {
                               : ""
                           }`}
                           style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
-                          onMouseDown={() => handleSelectStart(day, rowIndex)}
+                          onMouseDown={(event) => handleSelectStart(event, day, rowIndex)}
                           onMouseEnter={() => handleSelectMove(day, rowIndex)}
-                          onMouseUp={() => setIsSelecting(false)}
+                          onMouseUp={finalizeSelection}
                           data-day={day}
                           data-slot={slot}
                         />
                       ))
                     )}
                     {timetableEntries.flatMap((entry) => {
-                      const days = entry.Days.split(",").map((d) => d.trim());
+                      const days = normalizeDays(entry.Days).split(",").filter(Boolean);
                       const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
                       const startIndex = Math.max(
                         0,
@@ -1104,6 +1244,9 @@ export default function App() {
               value={scheduleForm.Days}
               onChange={(event) =>
                 setScheduleForm({ ...scheduleForm, Days: event.target.value })
+              }
+              onBlur={(event) =>
+                setScheduleForm({ ...scheduleForm, Days: normalizeDays(event.target.value) })
               }
             />
           </label>

@@ -47,9 +47,79 @@ def parse_time_lpu(time_lpu: str) -> tuple[str, int, int]:
     return f"{format_time_24(start_minutes)}-{format_time_24(end_minutes)}", start_minutes, end_minutes
 
 
+DAY_ALIASES = {
+    "m": "M",
+    "mon": "M",
+    "monday": "M",
+    "t": "T",
+    "tu": "T",
+    "tue": "T",
+    "tues": "T",
+    "tuesday": "T",
+    "w": "W",
+    "wed": "W",
+    "weds": "W",
+    "wednesday": "W",
+    "th": "Th",
+    "thu": "Th",
+    "thur": "Th",
+    "thurs": "Th",
+    "thursday": "Th",
+    "f": "F",
+    "fri": "F",
+    "friday": "F",
+    "sa": "Sa",
+    "sat": "Sa",
+    "saturday": "Sa",
+    "su": "Su",
+    "sun": "Su",
+    "sunday": "Su",
+}
+
+CANONICAL_DAYS = {"M", "T", "W", "Th", "F", "Sa", "Su"}
+
+
+def _parse_compact_days(value: str) -> list[str]:
+    tokens = []
+    idx = 0
+    while idx < len(value):
+        if value[idx : idx + 2].lower() == "th":
+            tokens.append("Th")
+            idx += 2
+        elif value[idx : idx + 2].lower() == "sa":
+            tokens.append("Sa")
+            idx += 2
+        elif value[idx : idx + 2].lower() == "su":
+            tokens.append("Su")
+            idx += 2
+        else:
+            char = value[idx].lower()
+            tokens.append(DAY_ALIASES.get(char, value[idx]))
+            idx += 1
+    return tokens
+
+
+def normalize_days_string(days: str) -> str:
+    if not days:
+        return ""
+    raw = days.replace("/", ",").replace(" ", ",")
+    parts = [part for part in raw.split(",") if part]
+    if len(parts) == 1 and len(parts[0]) > 2 and parts[0].isalpha():
+        tokens = _parse_compact_days(parts[0])
+    else:
+        tokens = []
+        for part in parts:
+            key = part.strip().lower()
+            if not key:
+                continue
+            tokens.append(DAY_ALIASES.get(key, part.strip()))
+    normalized = [token for token in tokens if token in CANONICAL_DAYS]
+    return ",".join(normalized)
+
+
 def normalize_days(days: str) -> set[str]:
-    cleaned = [day.strip().capitalize() for day in days.split(",") if day.strip()]
-    return set(cleaned)
+    normalized = normalize_days_string(days)
+    return {token for token in normalized.split(",") if token}
 
 
 def overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
