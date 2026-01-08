@@ -399,6 +399,9 @@ export default function App() {
   const [formEditId, setFormEditId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportSections, setExportSections] = useState(false);
+  const [exportFaculty, setExportFaculty] = useState(false);
+  const [exportRooms, setExportRooms] = useState(false);
   const [exportProgress, setExportProgress] = useState<{
     current: number;
     total: number;
@@ -406,13 +409,6 @@ export default function App() {
     running: boolean;
   } | null>(null);
   const [exportCancelRequested, setExportCancelRequested] = useState(false);
-  const [exportRender, setExportRender] = useState<{
-    title: string;
-    entries: ScheduleEntry[];
-    mode: ViewMode;
-    selectionName: string;
-    titleColor?: string;
-  } | null>(null);
   const [openExportSubmenu, setOpenExportSubmenu] = useState(false);
   const [ignoreFaculty, setIgnoreFaculty] = useState(false);
   const [ignoreRoom, setIgnoreRoom] = useState(false);
@@ -446,7 +442,6 @@ export default function App() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
-  const exportRenderRef = useRef<HTMLDivElement | null>(null);
   const exportCancelRef = useRef(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const customizeModalRef = useRef<HTMLDivElement | null>(null);
@@ -1109,11 +1104,17 @@ export default function App() {
     return canvas.toDataURL("image/png");
   };
 
-  const exportTimetablePng = async (selectionOverride?: string, modeOverride?: ViewMode) => {
+  const exportTimetablePng = async (
+    selectionOverride?: string,
+    modeOverride?: ViewMode,
+    force = false
+  ) => {
     const selectionName = selectionOverride ?? currentViewConfig.selected;
     if (!timetableRef.current || !selectionName) return;
-    if (isExporting) return;
-    setIsExporting(true);
+    if (isExporting && !force) return;
+    if (!force) {
+      setIsExporting(true);
+    }
     setToast({ message: "Exporting PNG...", showRevert: false });
     const dataUrl = await captureElementToPng(timetableRef.current);
     const link = document.createElement("a");
@@ -1126,74 +1127,78 @@ export default function App() {
     link.href = dataUrl;
     link.click();
     setToast({ message: "Exported", showRevert: false });
-    setIsExporting(false);
+    if (!force) {
+      setIsExporting(false);
+    }
   };
 
-  const exportBatch = async (
-    category: "faculty" | "section" | "room",
-    items: NamedEntity[]
+  const exportDelayMs = 150;
+
+  const exportTimetablePngFor = async (
+    selectionName: string,
+    mode: ViewMode,
+    progressLabel: string,
+    current: number,
+    total: number
   ) => {
-    if (!exportRenderRef.current) return;
-    if (items.length === 0) return;
+    if (exportCancelRef.current) return;
+    if (mode === "timetable-section") {
+      setSelectedSection(selectionName);
+    } else if (mode === "timetable-faculty") {
+      setSelectedFaculty(selectionName);
+    } else if (mode === "timetable-room") {
+      setSelectedRoom(selectionName);
+    }
+    setViewMode(mode);
+    await fetchTimetableForSelection(selectionName, mode);
+    setExportProgress({ current, total, label: progressLabel, running: true });
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    await new Promise((resolve) => setTimeout(resolve, exportDelayMs));
+    await exportTimetablePng(selectionName, mode, true);
+  };
+
+  const exportBatch = async () => {
+    if (isExporting) return;
+    const queue: Array<{ name: string; mode: ViewMode; label: string }> = [];
+    if (exportSections) {
+      sectionOptions.forEach((item) => {
+        queue.push({ name: item.name, mode: "timetable-section", label: `SECTION: ${item.name}` });
+      });
+    }
+    if (exportFaculty) {
+      facultyOptions.forEach((item) => {
+        queue.push({ name: item.name, mode: "timetable-faculty", label: `FACULTY: ${item.name}` });
+      });
+    }
+    if (exportRooms) {
+      roomOptions.forEach((item) => {
+        queue.push({ name: item.name, mode: "timetable-room", label: `ROOM: ${item.name}` });
+      });
+    }
+    const total = queue.length;
+    if (total === 0) return;
     exportCancelRef.current = false;
     setExportCancelRequested(false);
     setIsExporting(true);
-    const total = items.length;
-    for (let index = 0; index < items.length; index += 1) {
+    const previousMode = viewMode;
+    const previousSelection = currentViewConfig.selected;
+    for (let index = 0; index < queue.length; index += 1) {
       if (exportCancelRef.current) break;
-      const item = items[index];
-      const sanitizedName = sanitizeFilename(item.name);
-      if (!sanitizedName) continue;
-      const mode =
-        category === "faculty"
-          ? "timetable-faculty"
-          : category === "section"
-            ? "timetable-section"
-            : "timetable-room";
-      const params = new URLSearchParams();
-      if (mode === "timetable-section") {
-        params.set("section", item.name);
-      } else if (mode === "timetable-faculty") {
-        params.set("faculty", item.name);
-      } else {
-        params.set("room", item.name);
-      }
-      const res = await fetch(`${API_BASE}/schedule?${params.toString()}`);
-      const entries = (await res.json()) as ScheduleEntry[];
-      const titlePrefix =
-        category === "faculty" ? "FACULTY" : category === "section" ? "SECTION" : "ROOM";
-      const titleColor =
-        category === "faculty"
-          ? customizeSettings.facultyColors[item.name]
-          : undefined;
-      setExportProgress({
-        current: index + 1,
-        total,
-        label: `${titlePrefix}: ${item.name}`,
-        running: true,
-      });
-      setExportRender({
-        title: `${titlePrefix}: ${item.name}`,
-        entries,
-        mode,
-        selectionName: item.name,
-        titleColor,
-      });
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-      const dataUrl = await captureElementToPng(exportRenderRef.current);
+      const item = queue[index];
+      const sanitized = sanitizeFilename(item.name);
+      if (!sanitized) continue;
+      await exportTimetablePngFor(item.name, item.mode, item.label, index + 1, total);
       if (exportCancelRef.current) break;
-      await fetch(`${API_BASE}/export/png`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          category,
-          name: sanitizedName,
-          png_base64: dataUrl,
-        }),
-      });
+      await new Promise((resolve) => setTimeout(resolve, exportDelayMs));
     }
-    setExportRender(null);
+    setViewMode(previousMode);
+    if (previousMode === "timetable-section") {
+      setSelectedSection(previousSelection);
+    } else if (previousMode === "timetable-faculty") {
+      setSelectedFaculty(previousSelection);
+    } else if (previousMode === "timetable-room") {
+      setSelectedRoom(previousSelection);
+    }
     setExportProgress(null);
     setIsExporting(false);
     setExportCancelRequested(false);
@@ -1639,100 +1644,6 @@ export default function App() {
     currentViewConfig.setSelected(currentViewConfig.entities[nextIndex].name);
   };
 
-  const renderExportGrid = () => {
-    if (!exportRender) return null;
-    const exportDays = showSunday ? daysOfWeek : daysOfWeek.filter((day) => day !== "Su");
-    const exportSectionBg =
-      exportRender.mode === "timetable-section"
-        ? customizeSettings.sectionBgColors[exportRender.selectionName]
-        : undefined;
-    return (
-      <div className="export-wrapper" style={{ backgroundColor: exportSectionBg }}>
-        <div className="export-title" style={{ color: exportRender.titleColor }}>
-          {exportRender.title}
-        </div>
-        <div
-          className="timetable-grid export-grid"
-          style={{
-            gridTemplateColumns: `120px repeat(${exportDays.length}, 1fr)`,
-            gridTemplateRows: `repeat(${slots.length}, var(--row-height))`,
-            ["--row-height" as string]: rowHeight,
-            ["--font-size" as string]: fontSize,
-            ["--block-padding" as string]: blockPadding,
-          }}
-        >
-          <div
-            className="day-headers"
-            style={{ gridTemplateColumns: `120px repeat(${exportDays.length}, 1fr)` }}
-          >
-            <div className="time-header">Time</div>
-            {exportDays.map((day) => (
-              <div key={day} className="day-header">
-                {dayLabels[day]}
-              </div>
-            ))}
-          </div>
-          {slots.map((slot, rowIndex) => (
-            <div key={`export-time-${slot}`} className="time-cell" style={{ gridRow: rowIndex + 1 }}>
-              {toLpuLabel(slot, slot + interval)}
-            </div>
-          ))}
-          {exportDays.map((day, dayIndex) =>
-            slots.map((slot, rowIndex) => (
-              <div
-                key={`export-${day}-${slot}`}
-                className="cell"
-                style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
-              />
-            ))
-          )}
-          {exportRender.entries.flatMap((entry) => {
-            const days = normalizeDays(entry.Days).split(",").filter(Boolean);
-            const parsedTime = parseTimeRange(entry["Time (24 Hrs)"]);
-            if (!parsedTime || days.length === 0) return [];
-            const { start, end } = parsedTime;
-            const startIndex = Math.max(0, slots.findIndex((slot) => slot >= start));
-            const endIndex = Math.max(startIndex + 1, slots.findIndex((slot) => slot >= end));
-            return days
-              .filter((day) => exportDays.includes(day))
-              .map((day) => {
-                const column = exportDays.indexOf(day) + 2;
-                const blockBg =
-                  !conflictSet.has(entry.id) &&
-                  customizeSettings.blockDisplay.useFacultyColors &&
-                  customizeSettings.facultyColors[entry.Faculty]
-                    ? customizeSettings.facultyColors[entry.Faculty]
-                    : undefined;
-                const textColor = blockBg ? getReadableTextColor(blockBg) : undefined;
-                return (
-                  <div
-                    key={`export-${entry.id}-${day}`}
-                    className={`block ${conflictSet.has(entry.id) ? "conflict" : ""}`}
-                    style={{
-                      gridColumn: column,
-                      gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
-                      backgroundColor: blockBg,
-                      color: textColor,
-                    }}
-                  >
-                    <div className="block-content">
-                      {customizeSettings.blockDisplay.showCourseCode && (
-                        <div className="block-title">{entry["Course Code"]}</div>
-                      )}
-                      {exportRender.mode !== "timetable-section" && <div>{entry.Section}</div>}
-                      {customizeSettings.blockDisplay.showFaculty &&
-                        exportRender.mode !== "timetable-faculty" && <div>{entry.Faculty}</div>}
-                      {customizeSettings.blockDisplay.showRoom &&
-                        exportRender.mode !== "timetable-room" && <div>{entry.Room}</div>}
-                    </div>
-                  </div>
-                );
-              });
-          })}
-        </div>
-      </div>
-    );
-  };
 
   return (
     <div className="app">
@@ -1833,41 +1744,41 @@ export default function App() {
                   </button>
                   {openExportSubmenu ? (
                     <div className="submenu">
-                      <button
-                        className="menu-item"
-                        type="button"
-                        disabled={isExporting}
-                        onClick={() => {
-                          setOpenMenu(null);
-                          setOpenExportSubmenu(false);
-                          exportBatch("faculty", facultyOptions);
-                        }}
-                      >
-                        By Faculty
-                      </button>
-                      <button
-                        className="menu-item"
-                        type="button"
-                        disabled={isExporting}
-                        onClick={() => {
-                          setOpenMenu(null);
-                          setOpenExportSubmenu(false);
-                          exportBatch("section", sectionOptions);
-                        }}
-                      >
+                      <label className="menu-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={exportSections}
+                          onChange={(event) => setExportSections(event.target.checked)}
+                        />
                         By Section
-                      </button>
+                      </label>
+                      <label className="menu-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={exportFaculty}
+                          onChange={(event) => setExportFaculty(event.target.checked)}
+                        />
+                        By Faculty
+                      </label>
+                      <label className="menu-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={exportRooms}
+                          onChange={(event) => setExportRooms(event.target.checked)}
+                        />
+                        By Room
+                      </label>
                       <button
                         className="menu-item"
                         type="button"
-                        disabled={isExporting}
+                        disabled={isExporting || (!exportSections && !exportFaculty && !exportRooms)}
                         onClick={() => {
                           setOpenMenu(null);
                           setOpenExportSubmenu(false);
-                          exportBatch("room", roomOptions);
+                          exportBatch();
                         }}
                       >
-                        By Room
+                        Start Mass Export
                       </button>
                     </div>
                   ) : null}
@@ -2071,9 +1982,6 @@ export default function App() {
             </ul>
           )}
         </div>
-      </div>
-      <div id="export-render-root" className="export-render-root" ref={exportRenderRef}>
-        {exportRender ? renderExportGrid() : null}
       </div>
       {exportProgress ? (
         <div className="export-progress toast overlay">
