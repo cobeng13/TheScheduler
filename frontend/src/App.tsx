@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ScheduleEntry = {
   id: number;
@@ -207,6 +207,9 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; entry: ScheduleEntry } | null>(
+    null
+  );
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<typeof canonicalHeaders[number]>(
     "Course Code"
@@ -252,6 +255,9 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; showRevert: boolean } | null>(null);
   const [moveSnapshot, setMoveSnapshot] = useState<MoveSnapshot | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
+  const [formEditId, setFormEditId] = useState<number | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const courseCodeRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
@@ -387,6 +393,8 @@ export default function App() {
         setSelection(null);
         setSelectionEnd(null);
         setSelectionOrigin(null);
+        setBlockMenu(null);
+        setContextMenu(null);
       }
     };
     const handleClick = (event: MouseEvent) => {
@@ -397,6 +405,9 @@ export default function App() {
         setSelectionEnd(null);
         setSelectionOrigin(null);
       }
+      if (!target?.closest(".block-menu")) {
+        setBlockMenu(null);
+      }
     };
     document.addEventListener("keydown", handleKey);
     document.addEventListener("mousedown", handleClick);
@@ -405,6 +416,12 @@ export default function App() {
       document.removeEventListener("mousedown", handleClick);
     };
   }, []);
+
+  useEffect(() => {
+    if (!toast || toast.showRevert) return;
+    const timeout = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
 
   const conflictSet = useMemo(() => {
     const set = new Set<number>();
@@ -479,6 +496,16 @@ export default function App() {
     setDragTarget({ day, startMinutes: slot });
   };
 
+  const hasConflict = (candidate: ScheduleEntry, candidateDay: string, start: number, end: number) =>
+    entries.some((entry) => {
+      if (entry.id === candidate.id) return false;
+      const entryDays = splitDays(entry.Days);
+      if (!entryDays.includes(candidateDay)) return false;
+      const entryTime = parseTimeRange(entry["Time (24 Hrs)"]);
+      if (!overlap(start, end, entryTime.start, entryTime.end)) return false;
+      return entry.Room === candidate.Room || entry.Faculty === candidate.Faculty;
+    });
+
   const handleDrop = async () => {
     if (!dragging || !dragTarget) return;
     const { entry, day: originDay, duration } = dragging;
@@ -495,6 +522,13 @@ export default function App() {
     };
 
     const snapshot: MoveSnapshot = { previousEntries: [entry] };
+
+    if (hasConflict(entry, dragTarget.day, startMinutes, endMinutes)) {
+      setToast({ message: "Move blocked — conflict detected", showRevert: false });
+      setDragging(null);
+      setDragTarget(null);
+      return;
+    }
 
     if (days.length > 1) {
       const remaining = days.filter((token) => token !== originDay);
@@ -527,19 +561,15 @@ export default function App() {
     setMoveSnapshot(snapshot);
     await refreshAll();
     await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
-    const conflictsRes = await fetch(`${API_BASE}/conflicts`);
-    const conflictsData = await conflictsRes.json();
-    setConflicts(conflictsData);
     setDragging(null);
     setDragTarget(null);
     setLastSelection(null);
     setSelection(null);
     setSelectionEnd(null);
     setSelectionOrigin(null);
-    const hasConflicts = conflictsData.conflicts?.length > 0;
     setToast({
-      message: hasConflicts ? "Move saved — conflicts detected" : "Move saved",
-      showRevert: hasConflicts,
+      message: "Move saved",
+      showRevert: false,
     });
   };
 
@@ -589,6 +619,9 @@ export default function App() {
     const target = event.target as HTMLElement | null;
     const cell = target?.closest<HTMLElement>("[data-day][data-slot]");
     const inGrid = Boolean(target?.closest(".timetable-grid"));
+    if (target?.closest(".block")) {
+      return;
+    }
     if (selectionRange) {
       if (inGrid) {
         if (!cell) {
@@ -631,6 +664,63 @@ export default function App() {
     setContextMenu(null);
   };
 
+  const handleBlockContextMenu = (event: React.MouseEvent, entry: ScheduleEntry) => {
+    event.preventDefault();
+    setBlockMenu({ x: event.clientX, y: event.clientY, entry });
+  };
+
+  const enterEditMode = (entry: ScheduleEntry) => {
+    setFormEditId(entry.id);
+    setScheduleForm(entry);
+    setFormError("");
+    setBlockMenu(null);
+    if (panelRef.current) {
+      panelRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      window.setTimeout(() => {
+        courseCodeRef.current?.focus();
+      }, 150);
+    }
+  };
+
+  const cancelEditMode = () => {
+    setFormEditId(null);
+    setFormError("");
+  };
+
+  const saveFormEdit = async () => {
+    if (formEditId === null) return;
+    const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
+    if (!parsed) {
+      setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
+      return;
+    }
+    const normalizedDays = normalizeDays(scheduleForm.Days);
+    if (!normalizedDays) {
+      setFormError("Invalid Days. Example: M,W,F");
+      return;
+    }
+    const payload = { ...scheduleForm, Days: normalizedDays };
+    await fetch(`${API_BASE}/schedule/${formEditId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setFormEditId(null);
+    setToast({ message: "Saved", showRevert: false });
+    refreshAll();
+    fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+  };
+
+  const deleteEntry = async (entry: ScheduleEntry) => {
+    const confirmed = window.confirm("Delete this class?");
+    if (!confirmed) return;
+    await fetch(`${API_BASE}/schedule/${entry.id}`, { method: "DELETE" });
+    setBlockMenu(null);
+    setToast({ message: "Deleted", showRevert: false });
+    refreshAll();
+    fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+  };
+
   const ensureEntityExists = async (path: string, name: string, entities: NamedEntity[]) => {
     if (!name.trim()) return;
     const exists = entities.some(
@@ -645,6 +735,10 @@ export default function App() {
   };
 
   const handleCreateSchedule = async () => {
+    if (formEditId !== null) {
+      await saveFormEdit();
+      return;
+    }
     if (scheduleForm["Time (LPU Std)"]) {
       const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
       if (!parsed) {
@@ -782,6 +876,7 @@ export default function App() {
     setSelectionOrigin(null);
     setMoveSnapshot(null);
     setToast(null);
+    setFormEditId(null);
     setScheduleForm({
       id: 0,
       "Program": "",
@@ -1167,7 +1262,7 @@ export default function App() {
                 </div>
               </div>
               {toast && (
-                <div className="toast">
+                <div className="toast overlay">
                   <span>{toast.message}</span>
                   {toast.showRevert && moveSnapshot && (
                     <button className="nav-button" onClick={handleRevertMove}>
@@ -1268,6 +1363,7 @@ export default function App() {
                                 setDragging(null);
                                 setDragTarget(null);
                               }}
+                              onContextMenu={(event) => handleBlockContextMenu(event, entry)}
                             >
                               <div className="block-title">{entry["Course Code"]}</div>
                               {viewMode !== "timetable-section" && <div>{entry.Section}</div>}
@@ -1307,11 +1403,20 @@ export default function App() {
                   <button onClick={applySelectionToForm}>Add Class</button>
                 </div>
               )}
+              {blockMenu && (
+                <div
+                  className="block-menu"
+                  style={{ top: blockMenu.y, left: blockMenu.x }}
+                >
+                  <button onClick={() => enterEditMode(blockMenu.entry)}>Edit</button>
+                  <button onClick={() => deleteEntry(blockMenu.entry)}>Delete</button>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        <aside className="panel">
+        <aside className="panel" ref={panelRef}>
           <h3>Add Class</h3>
           <label>
             Program
@@ -1344,6 +1449,7 @@ export default function App() {
           <label>
             Course Code
             <input
+              ref={courseCodeRef}
               value={scheduleForm["Course Code"]}
               onChange={(event) =>
                 setScheduleForm({
@@ -1460,7 +1566,14 @@ export default function App() {
               ))}
             </datalist>
           </label>
-          <button onClick={handleCreateSchedule}>Add Class</button>
+          <button onClick={handleCreateSchedule}>
+            {formEditId ? "Save Changes" : "Add Class"}
+          </button>
+          {formEditId && (
+            <button className="secondary-button" onClick={cancelEditMode}>
+              Cancel
+            </button>
+          )}
           {formError && <p className="error">{formError}</p>}
 
           <h3>Add Section</h3>

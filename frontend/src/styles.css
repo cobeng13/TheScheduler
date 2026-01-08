@@ -239,6 +239,18 @@ body {
   font-size: 0.85rem;
 }
 
+.toast.overlay {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  margin-bottom: 0;
+  min-width: 240px;
+  justify-content: center;
+  pointer-events: auto;
+}
+
 .timetable-empty {
   text-align: center;
   color: #5b6b85;
@@ -326,6 +338,27 @@ body {
   z-index: 5;
 }
 
+.block-menu {
+  position: fixed;
+  background: #fff;
+  border: 1px solid #c6d0dd;
+  border-radius: 4px;
+  padding: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.block-menu button {
+  background: #ffffff;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
 .panel {
   background: #ffffff;
   border: 1px solid #d6dce8;
@@ -363,6 +396,12 @@ body {
   color: #fff;
   border-radius: 4px;
   cursor: pointer;
+}
+
+.panel .secondary-button {
+  background: #e9eef6;
+  color: #2f3b52;
+  border: 1px solid #ccd3df;
 }
 
 .panel button:hover {
