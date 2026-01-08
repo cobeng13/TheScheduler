@@ -8,9 +8,19 @@ from .schemas import ScheduleEntryCreate, ScheduleEntryUpdate
 
 
 def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.ScheduleEntry:
-    if not entry.time_lpu:
-        raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
-    time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(entry.time_lpu)
+    if time_utils.is_tba(entry.time_lpu) or time_utils.is_tba(entry.days):
+        normalized_lpu = "TBA"
+        time_24 = ""
+        start_minutes = None
+        end_minutes = None
+        normalized_days = "TBA"
+    else:
+        normalized_lpu, time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(
+            entry.time_lpu
+        )
+        normalized_days = time_utils.normalize_days_string(entry.days)
+        if not normalized_days:
+            raise ValueError("Invalid Days. Example: M,W,F")
     model = models.ScheduleEntry(
         program=entry.program,
         section=entry.section,
@@ -18,9 +28,9 @@ def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.Sch
         course_description=entry.course_description,
         units=entry.units,
         hours=entry.hours,
-        time_lpu=entry.time_lpu,
+        time_lpu=normalized_lpu,
         time_24=time_24,
-        days=time_utils.normalize_days_string(entry.days),
+        days=normalized_days,
         room=entry.room,
         faculty=entry.faculty,
         start_minutes=start_minutes,
@@ -38,18 +48,28 @@ def update_schedule_entry(
     model = db.get(models.ScheduleEntry, entry_id)
     if model is None:
         raise ValueError("Schedule entry not found")
-    if not entry.time_lpu:
-        raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
-    time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(entry.time_lpu)
+    if time_utils.is_tba(entry.time_lpu) or time_utils.is_tba(entry.days):
+        normalized_lpu = "TBA"
+        time_24 = ""
+        start_minutes = None
+        end_minutes = None
+        normalized_days = "TBA"
+    else:
+        normalized_lpu, time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(
+            entry.time_lpu
+        )
+        normalized_days = time_utils.normalize_days_string(entry.days)
+        if not normalized_days:
+            raise ValueError("Invalid Days. Example: M,W,F")
     model.program = entry.program
     model.section = entry.section
     model.course_code = entry.course_code
     model.course_description = entry.course_description
     model.units = entry.units
     model.hours = entry.hours
-    model.time_lpu = entry.time_lpu
+    model.time_lpu = normalized_lpu
     model.time_24 = time_24
-    model.days = time_utils.normalize_days_string(entry.days)
+    model.days = normalized_days
     model.room = entry.room
     model.faculty = entry.faculty
     model.start_minutes = start_minutes

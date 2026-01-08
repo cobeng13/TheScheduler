@@ -10,7 +10,7 @@ type ScheduleEntry = {
   "Units": number;
   "# of Hours": number;
   "Time (LPU Std)": string;
-  "Time (24 Hrs)": string;
+  "Time (24 Hrs)": string | null;
   Days: string;
   Room: string;
   Faculty: string;
@@ -25,6 +25,14 @@ type ConflictSummary = {
 };
 
 type ConflictReport = { conflicts: ConflictSummary[] };
+
+type CsvImportSummary = {
+  rows_total: number;
+  rows_imported: number;
+  rows_skipped: number;
+  missing_columns: string[];
+  errors: Array<{ row_index: number; reason: string }>;
+};
 
 type ViewMode = "text" | "timetable-section" | "timetable-faculty" | "timetable-room";
 
@@ -97,17 +105,27 @@ const splitDays = (days: string) =>
     .map((day) => day.trim())
     .filter(Boolean);
 
-const parseTimeRange = (range: string) => {
+const parseTimeRange = (range: string | null) => {
+  if (!range) return null;
   const [start, end] = range.split("-");
+  if (!start || !end) return null;
   const toMinutes = (time: string) => {
     const [h, m] = time.split(":").map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
     return h * 60 + m;
   };
-  return { start: toMinutes(start), end: toMinutes(end) };
+  const startMinutes = toMinutes(start);
+  const endMinutes = toMinutes(end);
+  if (startMinutes === null || endMinutes === null) return null;
+  return { start: startMinutes, end: endMinutes };
 };
 
 const parseLpuRange = (range: string) => {
-  const match = range
+  const cleaned = range.trim();
+  if (!cleaned || cleaned.toLowerCase() === "tba") {
+    return null;
+  }
+  const match = cleaned
     .trim()
     .match(/^(\d{1,2}):(\d{2})\s*([ap])\s*-\s*(\d{1,2}):(\d{2})\s*([ap])$/i);
   if (!match) {
@@ -271,6 +289,12 @@ export default function App() {
   const [openMenu, setOpenMenu] = useState<"file" | "export" | "rules" | null>(null);
   const [showFacultyRules, setShowFacultyRules] = useState(false);
   const [showRoomRules, setShowRoomRules] = useState(false);
+  const [csvImportState, setCsvImportState] = useState<{
+    file: File;
+    summary: CsvImportSummary;
+  } | null>(null);
+  const [isCsvImporting, setIsCsvImporting] = useState(false);
+  const [csvInputKey, setCsvInputKey] = useState(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
@@ -593,7 +617,9 @@ export default function App() {
   };
 
   const handleDragStart = (entry: ScheduleEntry, day: string) => {
-    const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
+    const parsed = parseTimeRange(entry["Time (24 Hrs)"]);
+    if (!parsed) return;
+    const { start, end } = parsed;
     setDragging({ entry, day, duration: end - start });
     setDragTarget({ day, startMinutes: start });
     setToast(null);
@@ -612,6 +638,7 @@ export default function App() {
       const entryDays = splitDays(entry.Days);
       if (!entryDays.includes(candidateDay)) return false;
       const entryTime = parseTimeRange(entry["Time (24 Hrs)"]);
+      if (!entryTime) return false;
       if (!overlap(start, end, entryTime.start, entryTime.end)) return false;
       return entry.Room === candidate.Room || entry.Faculty === candidate.Faculty;
     });
@@ -884,7 +911,14 @@ export default function App() {
       await saveFormEdit();
       return;
     }
-    if (scheduleForm["Time (LPU Std)"]) {
+    const timeValue = scheduleForm["Time (LPU Std)"].trim();
+    const daysValue = scheduleForm.Days.trim();
+    const isTbaEntry =
+      !timeValue ||
+      timeValue.toLowerCase() === "tba" ||
+      !daysValue ||
+      daysValue.toLowerCase() === "tba";
+    if (!isTbaEntry && scheduleForm["Time (LPU Std)"]) {
       const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
       if (!parsed) {
         setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
@@ -892,20 +926,20 @@ export default function App() {
       }
     }
     const requiredFields: Array<keyof ScheduleEntry> = [
-      "Time (LPU Std)",
       "Section",
       "Course Code",
       "Room",
       "Faculty",
-      "Days",
-      "Time (24 Hrs)",
     ];
-    const normalizedDays = normalizeDays(scheduleForm.Days);
-    if (!normalizedDays) {
+    const normalizedDays = isTbaEntry ? "TBA" : normalizeDays(scheduleForm.Days);
+    if (!isTbaEntry && !normalizedDays) {
       setFormError("Invalid Days. Example: M,W,F");
       return;
     }
     const missing = requiredFields.filter((field) => !scheduleForm[field]);
+    if (!isTbaEntry && !scheduleForm["Time (LPU Std)"]) {
+      missing.push("Time (LPU Std)");
+    }
     if (missing.length > 0) {
       setFormError(`Missing required fields: ${missing.join(", ")}`);
       return;
@@ -919,8 +953,8 @@ export default function App() {
     const payload = {
       ...scheduleForm,
       Days: normalizedDays,
-      "Time (LPU Std)":
-        scheduleForm["Time (LPU Std)"] || scheduleForm["Time (24 Hrs)"],
+      "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
+      "Time (24 Hrs)": "",
     };
     await fetch(`${API_BASE}/schedule`, {
       method: "POST",
@@ -963,19 +997,31 @@ export default function App() {
 
   const handleSaveEdit = async () => {
     if (!editEntry || editEntryId === null) return;
-    if (editEntry["Time (LPU Std)"]) {
+    const timeValue = editEntry["Time (LPU Std)"].trim();
+    const daysValue = editEntry.Days.trim();
+    const isTbaEntry =
+      !timeValue ||
+      timeValue.toLowerCase() === "tba" ||
+      !daysValue ||
+      daysValue.toLowerCase() === "tba";
+    if (!isTbaEntry && editEntry["Time (LPU Std)"]) {
       const parsed = parseLpuRange(editEntry["Time (LPU Std)"]);
       if (!parsed) {
         setEditError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
         return;
       }
     }
-    const normalizedDays = normalizeDays(editEntry.Days);
-    if (!normalizedDays) {
+    const normalizedDays = isTbaEntry ? "TBA" : normalizeDays(editEntry.Days);
+    if (!isTbaEntry && !normalizedDays) {
       setEditError("Invalid Days. Example: M,W,F");
       return;
     }
-    const payload = { ...editEntry, Days: normalizedDays };
+    const payload = {
+      ...editEntry,
+      Days: normalizedDays,
+      "Time (LPU Std)": isTbaEntry ? "TBA" : editEntry["Time (LPU Std)"],
+      "Time (24 Hrs)": "",
+    };
     await fetch(`${API_BASE}/schedule/${editEntryId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1056,6 +1102,39 @@ export default function App() {
     refreshAll();
   };
 
+  const handleImportCsvPreview = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API_BASE}/file/import-csv?preview=true`, {
+      method: "POST",
+      body: form,
+    });
+    const summary = (await res.json()) as CsvImportSummary;
+    setCsvImportState({ file, summary });
+    setCsvInputKey((prev) => prev + 1);
+    setOpenMenu(null);
+  };
+
+  const handleConfirmCsvImport = async () => {
+    if (!csvImportState || isCsvImporting) return;
+    setIsCsvImporting(true);
+    const form = new FormData();
+    form.append("file", csvImportState.file);
+    await fetch(`${API_BASE}/file/import-csv?replace=true`, {
+      method: "POST",
+      body: form,
+    });
+    setCsvImportState(null);
+    setIsCsvImporting(false);
+    refreshAll();
+  };
+
+  const handleCancelCsvImport = () => {
+    setCsvImportState(null);
+  };
+
   const handleExport = async (path: string, filename: string) => {
     const res = await fetch(`${API_BASE}${path}`);
     const blob = await res.blob();
@@ -1101,6 +1180,7 @@ export default function App() {
         const sharedDays = entryDays.filter((day) => otherDays.includes(day));
         const entryTime = parseTimeRange(entry["Time (24 Hrs)"]);
         const otherTime = parseTimeRange(other["Time (24 Hrs)"]);
+        if (!entryTime || !otherTime) return null;
         const hasOverlap = overlap(
           entryTime.start,
           entryTime.end,
@@ -1199,6 +1279,15 @@ export default function App() {
                         handleImportDb(event);
                         setOpenMenu(null);
                       }}
+                    />
+                  </label>
+                  <label className="menu-item file-input">
+                    Import CSV
+                    <input
+                      key={csvInputKey}
+                      type="file"
+                      accept=".csv"
+                      onChange={handleImportCsvPreview}
                     />
                   </label>
                 </div>
@@ -1431,6 +1520,51 @@ export default function App() {
           )}
         </div>
       </div>
+      {csvImportState ? (
+        <div className="modal-overlay">
+          <div className="modal">
+            <h3>Import CSV</h3>
+            <p>
+              Rows detected: <strong>{csvImportState.summary.rows_total}</strong>
+            </p>
+            {csvImportState.summary.missing_columns.length > 0 ? (
+              <div className="modal-warning">
+                Missing required columns:{" "}
+                {csvImportState.summary.missing_columns.join(", ")}
+              </div>
+            ) : null}
+            {csvImportState.summary.errors.length > 0 ? (
+              <div className="modal-errors">
+                <div>
+                  Rows with errors: {csvImportState.summary.errors.length}
+                </div>
+                <ul>
+                  {csvImportState.summary.errors.slice(0, 5).map((error) => (
+                    <li key={`${error.row_index}-${error.reason}`}>
+                      Row {error.row_index}: {error.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <p>Replace current timetable with this CSV?</p>
+            <div className="modal-actions">
+              <button type="button" onClick={handleCancelCsvImport}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCsvImport}
+                disabled={
+                  isCsvImporting || csvImportState.summary.missing_columns.length > 0
+                }
+              >
+                {isCsvImporting ? "Importing..." : "Yes, Replace"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="content">
         <div className="main">
@@ -1491,23 +1625,29 @@ export default function App() {
                         <td key={header}>
                           {editEntryId === entry.id && editEntry ? (
                             <input
-                              value={String(editEntry[header])}
+                              value={
+                                header === "Time (24 Hrs)"
+                                  ? editEntry["Time (24 Hrs)"] ?? ""
+                                  : String(editEntry[header])
+                              }
                               readOnly={header === "Time (24 Hrs)"}
                               onChange={(event) => {
                                 const value = event.target.value;
                                 if (header === "Time (LPU Std)") {
                                   const parsed = parseLpuRange(value);
+                                  const isTbaValue =
+                                    value.trim().toLowerCase() === "tba" || value.trim() === "";
                                   setEditEntry({
                                     ...editEntry,
                                     "Time (LPU Std)": value,
                                     "Time (24 Hrs)": parsed
                                       ? parsed.time24
-                                      : value
-                                        ? editEntry["Time (24 Hrs)"]
-                                        : "",
+                                      : isTbaValue
+                                        ? ""
+                                        : editEntry["Time (24 Hrs)"],
                                   });
                                   setEditError(
-                                    value && !parsed
+                                    value && !parsed && !isTbaValue
                                       ? "Invalid Time (LPU Std). Example: 10:00a-12:00p"
                                       : ""
                                   );
@@ -1682,7 +1822,9 @@ export default function App() {
                     )}
                     {timetableEntries.flatMap((entry) => {
                       const days = normalizeDays(entry.Days).split(",").filter(Boolean);
-                      const { start, end } = parseTimeRange(entry["Time (24 Hrs)"]);
+                      const parsedTime = parseTimeRange(entry["Time (24 Hrs)"]);
+                      if (!parsedTime || days.length === 0) return [];
+                      const { start, end } = parsedTime;
                       const startIndex = Math.max(
                         0,
                         slots.findIndex((slot) => slot >= start)
@@ -1854,12 +1996,13 @@ export default function App() {
               onChange={(event) => {
                 const value = event.target.value;
                 const parsed = parseLpuRange(value);
+                const isTbaValue = value.trim().toLowerCase() === "tba" || value.trim() === "";
                 setScheduleForm((prev) => ({
                   ...prev,
                   "Time (LPU Std)": value,
-                  "Time (24 Hrs)": parsed ? parsed.time24 : value ? prev["Time (24 Hrs)"] : "",
+                  "Time (24 Hrs)": parsed ? parsed.time24 : isTbaValue ? "" : prev["Time (24 Hrs)"],
                 }));
-                if (value && !parsed) {
+                if (value && !parsed && !isTbaValue) {
                   setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
                 } else {
                   setFormError("");
@@ -1870,7 +2013,7 @@ export default function App() {
           <label>
             Time (24 Hrs)
             <input
-              value={scheduleForm["Time (24 Hrs)"]}
+              value={scheduleForm["Time (24 Hrs)"] ?? ""}
               readOnly
             />
           </label>
@@ -1881,9 +2024,17 @@ export default function App() {
               onChange={(event) =>
                 setScheduleForm({ ...scheduleForm, Days: event.target.value })
               }
-              onBlur={(event) =>
-                setScheduleForm({ ...scheduleForm, Days: normalizeDays(event.target.value) })
-              }
+              onBlur={(event) => {
+                const value = event.target.value;
+                const trimmed = value.trim();
+                setScheduleForm({
+                  ...scheduleForm,
+                  Days:
+                    trimmed.toLowerCase() === "tba" || trimmed === ""
+                      ? "TBA"
+                      : normalizeDays(value),
+                });
+              }}
             />
           </label>
           <label>

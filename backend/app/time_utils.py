@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 
 TIME_RANGE_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
-LPU_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*([ap])\s*-\s*(\d{1,2}):(\d{2})\s*([ap])\s*$", re.IGNORECASE)
+LPU_TIME_RE = re.compile(
+    r"^\s*(\d{1,2}):(\d{2})\s*([ap])\s*-\s*(\d{1,2}):(\d{2})\s*([ap])\s*$",
+    re.IGNORECASE,
+)
 
 
 def parse_time_range(time_24: str) -> tuple[int, int]:
@@ -24,6 +27,14 @@ def format_time_24(minutes: int) -> str:
     return f"{hours:02d}:{mins:02d}"
 
 
+def format_time_lpu(minutes: int) -> str:
+    hours24 = minutes // 60
+    mins = minutes % 60
+    meridian = "a" if hours24 < 12 else "p"
+    hours12 = hours24 % 12 or 12
+    return f"{hours12}:{mins:02d}{meridian}"
+
+
 def _to_minutes(hour: int, minute: int, meridian: str) -> int:
     if hour < 1 or hour > 12 or minute < 0 or minute > 59:
         raise ValueError("Invalid time component")
@@ -35,7 +46,7 @@ def _to_minutes(hour: int, minute: int, meridian: str) -> int:
     return hour * 60 + minute
 
 
-def parse_time_lpu(time_lpu: str) -> tuple[str, int, int]:
+def parse_time_lpu(time_lpu: str) -> tuple[str, str, int, int]:
     match = LPU_TIME_RE.match(time_lpu)
     if not match:
         raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
@@ -44,7 +55,16 @@ def parse_time_lpu(time_lpu: str) -> tuple[str, int, int]:
     end_minutes = _to_minutes(int(end_h), int(end_m), end_ampm)
     if start_minutes >= end_minutes:
         raise ValueError("Invalid Time (LPU Std). Example: 10:00a-12:00p")
-    return f"{format_time_24(start_minutes)}-{format_time_24(end_minutes)}", start_minutes, end_minutes
+    normalized_lpu = f"{format_time_lpu(start_minutes)}-{format_time_lpu(end_minutes)}"
+    time_24 = f"{format_time_24(start_minutes)}-{format_time_24(end_minutes)}"
+    return normalized_lpu, time_24, start_minutes, end_minutes
+
+
+def is_tba(value: str | None) -> bool:
+    if value is None:
+        return True
+    cleaned = value.strip().lower()
+    return cleaned in {"", "tba"}
 
 
 DAY_ALIASES = {

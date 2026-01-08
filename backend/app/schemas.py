@@ -28,7 +28,7 @@ class ScheduleEntryBase(BaseModel):
     units: float = Field(..., alias="Units")
     hours: float = Field(..., alias="# of Hours")
     time_lpu: str = Field(..., alias="Time (LPU Std)")
-    time_24: str = Field(..., alias="Time (24 Hrs)")
+    time_24: Optional[str] = Field("", alias="Time (24 Hrs)")
     days: str = Field(..., alias="Days")
     room: str = Field(..., alias="Room")
     faculty: str = Field(..., alias="Faculty")

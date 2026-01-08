@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import csv
+import io
 import shutil
 from typing import List
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import conflicts, crud, models, reports, schemas
+from . import conflicts, crud, models, reports, schemas, time_utils
 from .db import DATABASE_PATH, SessionLocal, engine
 
 app = FastAPI(title="Scheduler API")
@@ -199,6 +202,154 @@ def import_database(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
     shutil.move(str(temp_path), target)
     return {"ok": True}
+
+
+@app.post("/file/import-csv")
+def import_csv(
+    file: UploadFile = File(...),
+    replace: bool = False,
+    preview: bool = False,
+    db: Session = Depends(get_db),
+):
+    text_stream = io.TextIOWrapper(file.file, encoding="utf-8-sig")
+    reader = csv.reader(text_stream)
+    header_row = next(reader, [])
+
+    header_map = {}
+    required_map = {
+        "program": "Program",
+        "section": "Section",
+        "course code": "Course Code",
+        "course description": "Course Description",
+        "units": "Units",
+        "# of hours": "# of Hours",
+        "time (lpu std)": "Time (LPU Std)",
+        "time (24 hrs)": "Time (24 Hrs)",
+        "days": "Days",
+        "room": "Room",
+        "faculty": "Faculty",
+    }
+    for idx, header in enumerate(header_row):
+        cleaned = header.strip()
+        if not cleaned or cleaned.lower().startswith("unnamed"):
+            continue
+        key = required_map.get(cleaned.lower())
+        if key:
+            header_map[key] = idx
+
+    required_headers = [
+        "Program",
+        "Section",
+        "Course Code",
+        "Course Description",
+        "Units",
+        "# of Hours",
+        "Time (LPU Std)",
+        "Days",
+        "Room",
+        "Faculty",
+    ]
+    missing = [header for header in required_headers if header not in header_map]
+    rows_total = 0
+    rows_imported = 0
+    rows_skipped = 0
+    errors = []
+
+    if missing:
+        return {
+            "rows_total": 0,
+            "rows_imported": 0,
+            "rows_skipped": 0,
+            "missing_columns": missing,
+            "errors": [{"row_index": 0, "reason": "Missing required columns"}],
+        }
+
+    if replace and not preview:
+        db.query(models.ScheduleEntry).delete()
+        db.commit()
+
+    sections = {section.name.lower(): section for section in db.scalars(select(models.Section))}
+    faculty = {item.name.lower(): item for item in db.scalars(select(models.Faculty))}
+    rooms = {item.name.lower(): item for item in db.scalars(select(models.Room))}
+
+    def ensure_entity(name: str, collection: dict, model_cls):
+        key = name.lower()
+        instance = collection.get(key)
+        if instance:
+            return instance
+        instance = model_cls(name=name)
+        db.add(instance)
+        collection[key] = instance
+        return instance
+
+    for idx, row in enumerate(reader, start=2):
+        rows_total += 1
+        try:
+            def get_value(header: str) -> str:
+                value = row[header_map[header]] if header_map.get(header) is not None and len(row) > header_map[header] else ""
+                return value.strip()
+
+            program = get_value("Program")
+            section = get_value("Section")
+            course_code = get_value("Course Code")
+            course_description = get_value("Course Description")
+            units = get_value("Units")
+            hours = get_value("# of Hours")
+            time_lpu = get_value("Time (LPU Std)")
+            days = get_value("Days")
+            room = get_value("Room")
+            faculty_name = get_value("Faculty")
+
+            if time_utils.is_tba(time_lpu) or time_utils.is_tba(days):
+                normalized_lpu = "TBA"
+                normalized_days = "TBA"
+                time_24 = ""
+                start_minutes = None
+                end_minutes = None
+            else:
+                normalized_lpu, time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(
+                    time_lpu
+                )
+                normalized_days = time_utils.normalize_days_string(days)
+                if not normalized_days:
+                    raise ValueError("Invalid Days. Example: M,W,F")
+
+            if not preview:
+                ensure_entity(section, sections, models.Section)
+                ensure_entity(faculty_name, faculty, models.Faculty)
+                ensure_entity(room, rooms, models.Room)
+
+                entry = models.ScheduleEntry(
+                    program=program,
+                    section=section,
+                    course_code=course_code,
+                    course_description=course_description,
+                    units=float(units) if units else 0,
+                    hours=float(hours) if hours else 0,
+                    time_lpu=normalized_lpu,
+                    time_24=time_24,
+                    days=normalized_days,
+                    room=room,
+                    faculty=faculty_name,
+                    start_minutes=start_minutes,
+                    end_minutes=end_minutes,
+                )
+                db.add(entry)
+            rows_imported += 1
+        except ValueError as exc:
+            rows_skipped += 1
+            errors.append({"row_index": idx, "reason": str(exc)})
+
+    if not preview:
+        db.commit()
+
+    return {
+        "rows_total": rows_total,
+        "rows_imported": rows_imported,
+        "rows_skipped": rows_skipped,
+        "missing_columns": [],
+        "errors": errors,
+    }
 
 
 @app.get("/file/export")

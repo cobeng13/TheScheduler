@@ -42,11 +42,15 @@ def find_conflicts(
     ignore_faculty_list = ignore_faculty_list or []
     ignore_room_list = ignore_room_list or []
     for entry in entries:
+        if entry.start_minutes is None or entry.end_minutes is None:
+            continue
         if ignore_tba and (_is_tba(entry.time_lpu) or _is_tba(entry.days)):
             continue
         entry_days = normalize_days(entry.days)
         for other in entries:
             if entry.id == other.id:
+                continue
+            if other.start_minutes is None or other.end_minutes is None:
                 continue
             if ignore_tba and (_is_tba(other.time_lpu) or _is_tba(other.days)):
                 continue
