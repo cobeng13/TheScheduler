@@ -176,6 +176,24 @@ export default function App() {
   const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
   const [editError, setEditError] = useState("");
   const [isSelecting, setIsSelecting] = useState(false);
+  const [zoomPercent, setZoomPercent] = useState(100);
+
+  useEffect(() => {
+    const storedProgram = localStorage.getItem("lastProgram");
+    const storedSection = localStorage.getItem("lastSection");
+    const storedZoom = localStorage.getItem("timetableZoom");
+    setScheduleForm((prev) => ({
+      ...prev,
+      Program: storedProgram ?? prev.Program,
+      Section: storedSection ?? prev.Section,
+    }));
+    if (storedZoom) {
+      const parsed = Number(storedZoom);
+      if (!Number.isNaN(parsed)) {
+        setZoomPercent(parsed);
+      }
+    }
+  }, []);
 
   const refreshAll = async () => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes, conflictsRes] =
@@ -306,8 +324,11 @@ export default function App() {
     setIsSelecting(true);
   };
 
-  const handleSelectMove = (index: number) => {
+  const handleSelectMove = (day: string, index: number) => {
     if (!selection || !isSelecting) return;
+    if (selection.day !== day) {
+      return;
+    }
     setSelection({
       ...selection,
       endIndex: index,
@@ -329,7 +350,16 @@ export default function App() {
 
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
-    if (selectionRange) {
+    const target = event.target as HTMLElement | null;
+    const cell = target?.closest<HTMLElement>("[data-day][data-slot]");
+    if (!selectionRange || !cell) return;
+    const day = cell.dataset.day ?? "";
+    const slot = Number(cell.dataset.slot ?? 0);
+    if (
+      selectionRange.day === day &&
+      slot >= selectionRange.startMinutes &&
+      slot < selectionRange.endMinutes
+    ) {
       setContextMenu({ x: event.clientX, y: event.clientY });
     }
   };
@@ -346,6 +376,19 @@ export default function App() {
       Days: selectionRange.day,
     }));
     setContextMenu(null);
+  };
+
+  const ensureEntityExists = async (path: string, name: string, entities: NamedEntity[]) => {
+    if (!name.trim()) return;
+    const exists = entities.some(
+      (entity) => entity.name.toLowerCase() === name.trim().toLowerCase()
+    );
+    if (exists) return;
+    await fetch(`${API_BASE}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
   };
 
   const handleCreateSchedule = async () => {
@@ -371,6 +414,10 @@ export default function App() {
       return;
     }
     setFormError("");
+    await ensureEntityExists("sections", scheduleForm.Section, sections);
+    await ensureEntityExists("faculty", scheduleForm.Faculty, faculty);
+    await ensureEntityExists("rooms", scheduleForm.Room, rooms);
+
     const payload = {
       ...scheduleForm,
       "Time (LPU Std)":
@@ -385,6 +432,13 @@ export default function App() {
       ...prev,
       "Course Code": "",
       "Course Description": "",
+      Units: 0,
+      "# of Hours": 0,
+      "Time (LPU Std)": "",
+      "Time (24 Hrs)": "",
+      Days: "",
+      Room: "",
+      Faculty: "",
     }));
     refreshAll();
   };
@@ -548,6 +602,19 @@ export default function App() {
     }).filter(Boolean);
   }, [conflicts, entries]);
 
+  const zoomStep = 5;
+  const zoomMin = 75;
+  const zoomMax = 130;
+  const applyZoom = (next: number) => {
+    const clamped = Math.min(zoomMax, Math.max(zoomMin, next));
+    setZoomPercent(clamped);
+    localStorage.setItem("timetableZoom", String(clamped));
+  };
+
+  const rowHeight = `${40 * (zoomPercent / 100)}px`;
+  const fontSize = `${12 * (zoomPercent / 100)}px`;
+  const blockPadding = `${6 * (zoomPercent / 100)}px`;
+
   const currentIndex = useMemo(
     () =>
       currentViewConfig.entities.findIndex((entity) => entity.name === effectiveSelection),
@@ -633,23 +700,42 @@ export default function App() {
 
       <div className="content">
         <div className="main">
-          <div className="controls">
-            <label>
-              Show Sunday
-              <input
-                type="checkbox"
-                checked={showSunday}
-                onChange={(event) => setShowSunday(event.target.checked)}
-              />
-            </label>
-            <label>
-              15-minute slots
-              <input
-                type="checkbox"
-                checked={useQuarterHours}
-                onChange={(event) => setUseQuarterHours(event.target.checked)}
-              />
-            </label>
+          <div className="controls-row">
+            <div className="controls">
+              <label>
+                Show Sunday
+                <input
+                  type="checkbox"
+                  checked={showSunday}
+                  onChange={(event) => setShowSunday(event.target.checked)}
+                />
+              </label>
+              <label>
+                15-minute slots
+                <input
+                  type="checkbox"
+                  checked={useQuarterHours}
+                  onChange={(event) => setUseQuarterHours(event.target.checked)}
+                />
+              </label>
+            </div>
+            <div className="conflict-panel">
+              <div className="conflict-panel-title">Conflicts</div>
+              {conflictDetails.length === 0 ? (
+                <p className="muted">No conflicts detected.</p>
+              ) : (
+                <ul className="conflict-list">
+                  {conflictDetails.map((conflict, index) => (
+                    <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
+                      <strong>{conflict?.type.toUpperCase()}</strong>:{" "}
+                      {conflict?.entry["Course Code"]} ({conflict?.entry.Section}) vs{" "}
+                      {conflict?.other["Course Code"]} ({conflict?.other.Section}) on{" "}
+                      {conflict?.sharedDays.join(", ")} at {conflict?.overlapTime}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
 
           {viewMode === "text" ? (
@@ -773,15 +859,34 @@ export default function App() {
                     (currentViewConfig.label ? `No ${currentViewConfig.label} yet` : "")}
                 </div>
                 <div className="timetable-header-right">
-                  <button
-                    className="nav-button"
-                    onClick={handleNextEntity}
-                    disabled={!hasMultipleEntities}
-                  >
-                    ▶
-                  </button>
-                </div>
-              </div>
+                  <div className="zoom-controls">
+                    <button
+                      className="nav-button"
+                      onClick={() => applyZoom(zoomPercent - zoomStep)}
+                      disabled={zoomPercent <= zoomMin}
+                    >
+                      -
+                    </button>
+                    <button className="nav-button" onClick={() => applyZoom(100)}>
+                      Reset
+                    </button>
+                    <button
+                      className="nav-button"
+                      onClick={() => applyZoom(zoomPercent + zoomStep)}
+                      disabled={zoomPercent >= zoomMax}
+                    >
+                      +
+                    </button>
+                  </div>
+          <button
+            className="nav-button"
+            onClick={handleNextEntity}
+            disabled={!hasMultipleEntities}
+          >
+            ▶
+          </button>
+        </div>
+      </div>
               {currentViewConfig.entities.length === 0 ? (
                 <p className="timetable-empty">No {currentViewConfig.label} yet.</p>
               ) : (
@@ -803,7 +908,10 @@ export default function App() {
                     className="timetable-grid"
                     style={{
                       gridTemplateColumns: `120px repeat(${visibleDays.length}, 1fr)`,
-                      gridTemplateRows: `repeat(${slots.length}, 40px)`,
+                      gridTemplateRows: `repeat(${slots.length}, var(--row-height))`,
+                      ["--row-height" as string]: rowHeight,
+                      ["--font-size" as string]: fontSize,
+                      ["--block-padding" as string]: blockPadding,
                     }}
                   >
                     {slots.map((slot, rowIndex) => (
@@ -829,8 +937,10 @@ export default function App() {
                           }`}
                           style={{ gridColumn: dayIndex + 2, gridRow: rowIndex + 1 }}
                           onMouseDown={() => handleSelectStart(day, rowIndex)}
-                          onMouseEnter={() => handleSelectMove(rowIndex)}
+                          onMouseEnter={() => handleSelectMove(day, rowIndex)}
                           onMouseUp={() => setIsSelecting(false)}
+                          data-day={day}
+                          data-slot={slot}
                         />
                       ))
                     )}
@@ -887,18 +997,22 @@ export default function App() {
             Program
             <input
               value={scheduleForm.Program}
-              onChange={(event) =>
-                setScheduleForm({ ...scheduleForm, Program: event.target.value })
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                setScheduleForm({ ...scheduleForm, Program: value });
+                localStorage.setItem("lastProgram", value);
+              }}
             />
           </label>
           <label>
             Section
             <input
               value={scheduleForm.Section}
-              onChange={(event) =>
-                setScheduleForm({ ...scheduleForm, Section: event.target.value })
-              }
+              onChange={(event) => {
+                const value = event.target.value;
+                setScheduleForm({ ...scheduleForm, Section: value });
+                localStorage.setItem("lastSection", value);
+              }}
               list="section-list"
             />
             <datalist id="section-list">
@@ -1070,21 +1184,6 @@ export default function App() {
           >
             Add Room
           </button>
-          <h3>Conflicts</h3>
-          {conflictDetails.length === 0 ? (
-            <p className="muted">No conflicts detected.</p>
-          ) : (
-            <ul className="conflict-list">
-              {conflictDetails.map((conflict, index) => (
-                <li key={`${conflict?.entry.id}-${conflict?.other.id}-${index}`}>
-                  <strong>{conflict?.type.toUpperCase()}</strong>: {conflict?.entry["Course Code"]}{" "}
-                  ({conflict?.entry.Section}) vs {conflict?.other["Course Code"]} (
-                  {conflict?.other.Section}) on {conflict?.sharedDays.join(", ")} at{" "}
-                  {conflict?.overlapTime}
-                </li>
-              ))}
-            </ul>
-          )}
         </aside>
       </div>
     </div>
