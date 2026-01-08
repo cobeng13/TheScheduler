@@ -514,6 +514,27 @@ export default function App() {
     };
   }, [isCustomizeOpen]);
 
+  const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
+    if (!mode.startsWith("timetable") || !selectionName) {
+      setTimetableEntries([]);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (mode === "timetable-section") {
+      params.set("section", selectionName);
+    } else if (mode === "timetable-faculty") {
+      params.set("faculty", selectionName);
+    } else if (mode === "timetable-room") {
+      params.set("room", selectionName);
+    }
+    const res = await fetch(`${API_BASE}/schedule?${params.toString()}`);
+    setTimetableEntries(await res.json());
+  };
+
+  const sectionOptions = useMemo(() => sortEntities(sections), [sections]);
+  const facultyOptions = useMemo(() => sortEntities(faculty), [faculty]);
+  const roomOptions = useMemo(() => sortEntities(rooms), [rooms]);
+
   useEffect(() => {
     if (!selectedFacultyColor && facultyOptions.length > 0) {
       setSelectedFacultyColor(facultyOptions[0].name);
@@ -535,27 +556,6 @@ export default function App() {
     if (!selectedSectionColor) return;
     setSectionColorInput(customizeSettings.sectionBgColors[selectedSectionColor] ?? "");
   }, [selectedSectionColor, customizeSettings.sectionBgColors]);
-
-  const fetchTimetableForSelection = async (selectionName: string, mode: ViewMode) => {
-    if (!mode.startsWith("timetable") || !selectionName) {
-      setTimetableEntries([]);
-      return;
-    }
-    const params = new URLSearchParams();
-    if (mode === "timetable-section") {
-      params.set("section", selectionName);
-    } else if (mode === "timetable-faculty") {
-      params.set("faculty", selectionName);
-    } else if (mode === "timetable-room") {
-      params.set("room", selectionName);
-    }
-    const res = await fetch(`${API_BASE}/schedule?${params.toString()}`);
-    setTimetableEntries(await res.json());
-  };
-
-  const sectionOptions = useMemo(() => sortEntities(sections), [sections]);
-  const facultyOptions = useMemo(() => sortEntities(faculty), [faculty]);
-  const roomOptions = useMemo(() => sortEntities(rooms), [rooms]);
 
   const currentViewConfig = useMemo(() => {
     if (viewMode === "timetable-section") {
