@@ -1332,7 +1332,7 @@ export default function App() {
                         className="time-cell"
                         style={{ gridRow: rowIndex + 1 }}
                       >
-                        {formatMinutes(slot)}
+                        {toLpuLabel(slot, slot + interval)}
                       </div>
                     ))}
                     {visibleDays.map((day, dayIndex) =>
