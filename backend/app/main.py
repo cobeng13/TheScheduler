@@ -303,7 +303,7 @@ def import_csv(
             if time_utils.is_tba(time_lpu) or time_utils.is_tba(days):
                 normalized_lpu = "TBA"
                 normalized_days = "TBA"
-                time_24 = ""
+                time_24 = None
                 start_minutes = None
                 end_minutes = None
             else:

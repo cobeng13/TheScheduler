@@ -10,7 +10,7 @@ from .schemas import ScheduleEntryCreate, ScheduleEntryUpdate
 def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.ScheduleEntry:
     if time_utils.is_tba(entry.time_lpu) or time_utils.is_tba(entry.days):
         normalized_lpu = "TBA"
-        time_24 = ""
+        time_24 = None
         start_minutes = None
         end_minutes = None
         normalized_days = "TBA"
@@ -50,7 +50,7 @@ def update_schedule_entry(
         raise ValueError("Schedule entry not found")
     if time_utils.is_tba(entry.time_lpu) or time_utils.is_tba(entry.days):
         normalized_lpu = "TBA"
-        time_24 = ""
+        time_24 = None
         start_minutes = None
         end_minutes = None
         normalized_days = "TBA"
