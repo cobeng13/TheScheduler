@@ -1033,10 +1033,6 @@ export default function App() {
     setSelection(null);
     setSelectionEnd(null);
     setSelectionOrigin(null);
-    setToast({
-      message: "Move saved",
-      showRevert: false,
-    });
     setIsSaving(false);
   };
 
@@ -1270,8 +1266,7 @@ export default function App() {
   const exportTimetablePng = async (
     selectionOverride?: string,
     modeOverride?: ViewMode,
-    force = false,
-    showSuccessToast = true
+    force = false
   ) => {
     const selectionName = selectionOverride ?? currentViewConfig.selected;
     if (!timetableRef.current || !selectionName) return;
@@ -1279,7 +1274,6 @@ export default function App() {
     if (!force) {
       setIsExporting(true);
     }
-    setToast({ message: "Exporting PNG...", showRevert: false });
     const dataUrl = await captureElementToPng(timetableRef.current);
     const link = document.createElement("a");
     const modeLabel = (modeOverride ?? viewMode).split("-")[1] ?? "timetable";
@@ -1290,9 +1284,6 @@ export default function App() {
     link.download = `timetable_${modeLabel}_${safeName || "export"}.png`;
     link.href = dataUrl;
     link.click();
-    if (showSuccessToast) {
-      setToast({ message: "Exported", showRevert: false });
-    }
     if (!force) {
       setIsExporting(false);
     }
@@ -1320,7 +1311,7 @@ export default function App() {
     setExportProgress({ current, total, label: progressLabel, running: true });
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     await new Promise((resolve) => setTimeout(resolve, exportDelayMs));
-    await exportTimetablePng(selectionName, mode, true, false);
+    await exportTimetablePng(selectionName, mode, true);
   };
 
   const exportBatch = async () => {
