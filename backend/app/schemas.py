@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -77,3 +77,7 @@ class ConflictReport(BaseModel):
 
 class SelectionRequest(BaseModel):
     ids: Optional[List[int]] = None
+
+
+class AppSettingsPayload(BaseModel):
+    settings: Dict[str, Any]

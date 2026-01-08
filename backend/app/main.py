@@ -3,10 +3,12 @@ from __future__ import annotations
 import base64
 import csv
 import io
+import json
 import shutil
 from pathlib import Path
 from uuid import uuid4
 from typing import List
+from types import SimpleNamespace
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,6 +92,74 @@ def delete_schedule(entry_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@app.post("/schedule/{entry_id}/move-check")
+def move_check(
+    entry_id: int,
+    entry: schemas.ScheduleEntryUpdate,
+    ignore_faculty: bool = False,
+    ignore_room: bool = False,
+    ignore_tba: bool = False,
+    ignore_faculty_list: str | None = None,
+    ignore_room_list: str | None = None,
+    contains_faculty: bool = False,
+    contains_room: bool = False,
+    db: Session = Depends(get_db),
+):
+    if time_utils.is_tba(entry.time_lpu) or time_utils.is_tba(entry.days):
+        normalized_lpu = "TBA"
+        start_minutes = None
+        end_minutes = None
+        normalized_days = "TBA"
+    else:
+        try:
+            normalized_lpu, _time_24, start_minutes, end_minutes = time_utils.parse_time_lpu(
+                entry.time_lpu
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        normalized_days = time_utils.normalize_days_string(entry.days)
+        if not normalized_days:
+            raise HTTPException(status_code=422, detail="Invalid Days. Example: M,W,F")
+
+    candidate = SimpleNamespace(
+        time_lpu=normalized_lpu,
+        days=normalized_days,
+        start_minutes=start_minutes,
+        end_minutes=end_minutes,
+        room=entry.room,
+        faculty=entry.faculty,
+    )
+    faculty_list = ignore_faculty_list.split(",") if ignore_faculty_list else []
+    room_list = ignore_room_list.split(",") if ignore_room_list else []
+    conflicts_list = conflicts.conflicts_for_candidate(
+        db,
+        entry_id,
+        candidate,
+        ignore_faculty=ignore_faculty,
+        ignore_room=ignore_room,
+        ignore_tba=ignore_tba,
+        ignore_faculty_list=faculty_list,
+        ignore_room_list=room_list,
+        contains_faculty=contains_faculty,
+        contains_room=contains_room,
+    )
+    if conflicts_list:
+        return {
+            "ok": False,
+            "reason": "conflict",
+            "conflicts": [
+                {
+                    "conflict_type": conflict["conflict_type"],
+                    "entry": schemas.ScheduleEntry.from_orm(conflict["entry"]).model_dump(
+                        by_alias=True
+                    ),
+                }
+                for conflict in conflicts_list
+            ],
+        }
+    return {"ok": True}
+
+
 @app.get("/sections", response_model=List[schemas.NamedEntity])
 def list_sections(db: Session = Depends(get_db)):
     return crud.list_named_entities(db, models.Section)
@@ -168,6 +238,20 @@ def export_text_csv(db: Session = Depends(get_db)):
     rows = reports.build_text_rows(entries)
     content = reports.write_csv(rows)
     return Response(content, media_type="text/csv")
+
+
+@app.get("/settings", response_model=schemas.AppSettingsPayload)
+def get_settings(db: Session = Depends(get_db)):
+    instance = crud.get_app_settings(db)
+    if instance is None:
+        return schemas.AppSettingsPayload(settings={})
+    return schemas.AppSettingsPayload(settings=json.loads(instance.settings_json))
+
+
+@app.put("/settings", response_model=schemas.AppSettingsPayload)
+def update_settings(payload: schemas.AppSettingsPayload, db: Session = Depends(get_db)):
+    instance = crud.set_app_settings(db, json.dumps(payload.settings))
+    return schemas.AppSettingsPayload(settings=json.loads(instance.settings_json))
 
 
 def filter_entries(entries, group: str, filter_value: str | None):

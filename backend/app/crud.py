@@ -105,3 +105,19 @@ def create_named_entity(db: Session, model_cls, name: str):
 
 def list_named_entities(db: Session, model_cls):
     return list(db.scalars(select(model_cls).order_by(model_cls.name)))
+
+
+def get_app_settings(db: Session) -> models.AppSettings | None:
+    return db.get(models.AppSettings, 1)
+
+
+def set_app_settings(db: Session, settings_json: str) -> models.AppSettings:
+    instance = db.get(models.AppSettings, 1)
+    if instance is None:
+        instance = models.AppSettings(id=1, settings_json=settings_json)
+        db.add(instance)
+    else:
+        instance.settings_json = settings_json
+    db.commit()
+    db.refresh(instance)
+    return instance

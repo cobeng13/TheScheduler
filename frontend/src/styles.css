@@ -646,6 +646,10 @@ body {
   background: rgba(220, 80, 80, 0.85);
 }
 
+.block.selected {
+  box-shadow: 0 0 0 2px #1f6feb;
+}
+
 .block.preview {
   background: rgba(46, 115, 206, 0.35);
   border: 1px dashed #2f5fa7;

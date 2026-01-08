@@ -26,6 +26,17 @@ type ConflictSummary = {
 
 type ConflictReport = { conflicts: ConflictSummary[] };
 
+type MoveConflictDetail = {
+  conflict_type: "room" | "faculty";
+  entry: ScheduleEntry;
+};
+
+type MoveCheckResponse = {
+  ok: boolean;
+  reason?: string;
+  conflicts?: MoveConflictDetail[];
+};
+
 type CsvImportSummary = {
   rows_total: number;
   rows_imported: number;
@@ -47,6 +58,12 @@ type MoveSnapshot = {
   createdEntryId?: number;
   deletedEntry?: ScheduleEntry;
 };
+
+type UndoAction =
+  | { type: "add"; entryId: number; label: string }
+  | { type: "delete"; entry: ScheduleEntry; label: string }
+  | { type: "edit"; entry: ScheduleEntry; label: string }
+  | { type: "move"; snapshot: MoveSnapshot; label: string };
 
 type CustomizeSettings = {
   blockDisplay: {
@@ -72,6 +89,30 @@ const defaultCustomizeSettings: CustomizeSettings = {
   facultyColors: {},
   sectionBgColors: {},
 };
+
+const normalizeCustomizeSettings = (settings: Partial<CustomizeSettings> | null) => ({
+  ...defaultCustomizeSettings,
+  ...settings,
+  blockDisplay: {
+    ...defaultCustomizeSettings.blockDisplay,
+    ...settings?.blockDisplay,
+  },
+});
+
+const buildEmptyScheduleForm = (defaults?: Partial<ScheduleEntry>): ScheduleEntry => ({
+  id: 0,
+  "Program": defaults?.Program ?? "",
+  "Section": defaults?.Section ?? "",
+  "Course Code": "",
+  "Course Description": "",
+  Units: 0,
+  "# of Hours": 0,
+  "Time (LPU Std)": "",
+  "Time (24 Hrs)": "",
+  Days: "",
+  Room: "",
+  Faculty: "",
+});
 
 const canonicalHeaders = [
   "Program",
@@ -360,20 +401,9 @@ export default function App() {
   const [selectedFaculty, setSelectedFaculty] = useState("");
   const [selectedRoom, setSelectedRoom] = useState("");
   const [timetableEntries, setTimetableEntries] = useState<ScheduleEntry[]>([]);
-  const [scheduleForm, setScheduleForm] = useState<ScheduleEntry>({
-    id: 0,
-    "Program": "",
-    "Section": "",
-    "Course Code": "",
-    "Course Description": "",
-    Units: 0,
-    "# of Hours": 0,
-    "Time (LPU Std)": "",
-    "Time (24 Hrs)": "",
-    Days: "",
-    Room: "",
-    Faculty: "",
-  });
+  const [scheduleForm, setScheduleForm] = useState<ScheduleEntry>(() =>
+    buildEmptyScheduleForm()
+  );
   const [newSection, setNewSection] = useState("");
   const [newFaculty, setNewFaculty] = useState("");
   const [newRoom, setNewRoom] = useState("");
@@ -382,6 +412,7 @@ export default function App() {
   const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
   const [editError, setEditError] = useState("");
   const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedEntryId, setSelectedEntryId] = useState<number | null>(null);
   const [selectionOrigin, setSelectionOrigin] = useState<{ day: string; index: number } | null>(
     null
   );
@@ -395,6 +426,7 @@ export default function App() {
   );
   const [toast, setToast] = useState<{ message: string; showRevert: boolean } | null>(null);
   const [moveSnapshot, setMoveSnapshot] = useState<MoveSnapshot | null>(null);
+  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [formEditId, setFormEditId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -431,6 +463,7 @@ export default function App() {
   const [customizeSettings, setCustomizeSettings] =
     useState<CustomizeSettings>(defaultCustomizeSettings);
   const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [selectedFacultyColor, setSelectedFacultyColor] = useState("");
   const [facultyColorInput, setFacultyColorInput] = useState("");
   const [facultyRgb, setFacultyRgb] = useState({ r: 0, g: 0, b: 0 });
@@ -445,6 +478,7 @@ export default function App() {
   const exportCancelRef = useRef(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const customizeModalRef = useRef<HTMLDivElement | null>(null);
+  const settingsSaveTimeout = useRef<number | null>(null);
 
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
@@ -493,14 +527,7 @@ export default function App() {
     if (storedCustomize) {
       try {
         const parsed = JSON.parse(storedCustomize) as CustomizeSettings;
-        setCustomizeSettings({
-          ...defaultCustomizeSettings,
-          ...parsed,
-          blockDisplay: {
-            ...defaultCustomizeSettings.blockDisplay,
-            ...parsed.blockDisplay,
-          },
-        });
+        setCustomizeSettings(normalizeCustomizeSettings(parsed));
       } catch {
         setCustomizeSettings(defaultCustomizeSettings);
       }
@@ -524,6 +551,31 @@ export default function App() {
     setConflicts(await conflictsRes.json());
   };
 
+  const persistSettings = async (settings: CustomizeSettings) => {
+    await fetch(`${API_BASE}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings }),
+    });
+  };
+
+  const loadSettingsFromServer = async () => {
+    const res = await fetch(`${API_BASE}/settings`);
+    if (!res.ok) {
+      setSettingsLoaded(true);
+      return;
+    }
+    const data = await res.json();
+    if (data?.settings && Object.keys(data.settings).length > 0) {
+      setCustomizeSettings(normalizeCustomizeSettings(data.settings));
+    }
+    setSettingsLoaded(true);
+  };
+
+  const pushUndoAction = (action: UndoAction) => {
+    setUndoStack((prev) => [action, ...prev].slice(0, 20));
+  };
+
   const refreshAll = async () => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes] = await Promise.all([
       fetch(`${API_BASE}/schedule`),
@@ -543,6 +595,7 @@ export default function App() {
 
   useEffect(() => {
     refreshAll();
+    loadSettingsFromServer();
   }, []);
 
   useEffect(() => {
@@ -566,7 +619,19 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(CUSTOMIZE_STORAGE_KEY, JSON.stringify(customizeSettings));
-  }, [customizeSettings]);
+    if (!settingsLoaded) return;
+    if (settingsSaveTimeout.current) {
+      window.clearTimeout(settingsSaveTimeout.current);
+    }
+    settingsSaveTimeout.current = window.setTimeout(() => {
+      persistSettings(customizeSettings);
+    }, 300);
+    return () => {
+      if (settingsSaveTimeout.current) {
+        window.clearTimeout(settingsSaveTimeout.current);
+      }
+    };
+  }, [customizeSettings, settingsLoaded]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -854,16 +919,55 @@ export default function App() {
     setDragTarget({ day, startMinutes: slot });
   };
 
-  const hasConflict = (candidate: ScheduleEntry, candidateDay: string, start: number, end: number) =>
-    entries.some((entry) => {
-      if (entry.id === candidate.id) return false;
-      const entryDays = splitDays(entry.Days);
-      if (!entryDays.includes(candidateDay)) return false;
-      const entryTime = parseTimeRange(entry["Time (24 Hrs)"]);
-      if (!entryTime) return false;
-      if (!overlap(start, end, entryTime.start, entryTime.end)) return false;
-      return entry.Room === candidate.Room || entry.Faculty === candidate.Faculty;
+  const formatDaysForDisplay = (days: string) => {
+    if (!days || days.toLowerCase() === "tba") return "TBA";
+    return normalizeDays(days)
+      .split(",")
+      .map((day) => dayLabels[day] ?? day)
+      .join(", ");
+  };
+
+  const buildConflictMessage = (conflictsList: MoveConflictDetail[]) => {
+    const details = conflictsList.map((conflict) => {
+      const entry = conflict.entry;
+      const typeLabel = conflict.conflict_type === "room" ? "ROOM" : "FACULTY";
+      const owner = conflict.conflict_type === "room" ? entry.Room : entry.Faculty;
+      const timeLabel =
+        entry["Time (LPU Std)"] && entry["Time (LPU Std)"].toLowerCase() !== "tba"
+          ? entry["Time (LPU Std)"].replace("-", "–")
+          : "TBA";
+      const daysLabel = formatDaysForDisplay(entry.Days);
+      return `${typeLabel} ${owner} — ${entry.Section} / ${entry["Course Code"]} — ${daysLabel} ${timeLabel} (Room ${entry.Room}, Faculty ${entry.Faculty})`;
     });
+    return `Move blocked: conflicts with ${details.join(" | ")}.`;
+  };
+
+  const checkMoveConflicts = async (entry: ScheduleEntry, payload: ScheduleEntry) => {
+    const params = new URLSearchParams();
+    params.set("ignore_faculty", String(ignoreFaculty));
+    params.set("ignore_room", String(ignoreRoom));
+    params.set("ignore_tba", String(ignoreTba));
+    if (ignoreFacultyList.length > 0) {
+      params.set("ignore_faculty_list", ignoreFacultyList.join(","));
+    }
+    if (ignoreRoomList.length > 0) {
+      params.set("ignore_room_list", ignoreRoomList.join(","));
+    }
+    params.set("contains_faculty", String(containsFaculty));
+    params.set("contains_room", String(containsRoom));
+    const response = await fetch(
+      `${API_BASE}/schedule/${entry.id}/move-check?${params.toString()}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!response.ok) {
+      return { ok: true } as MoveCheckResponse;
+    }
+    return (await response.json()) as MoveCheckResponse;
+  };
 
   const handleDrop = async () => {
     if (!dragging || !dragTarget) return;
@@ -882,8 +986,9 @@ export default function App() {
 
     const snapshot: MoveSnapshot = { previousEntries: [entry] };
 
-    if (hasConflict(entry, dragTarget.day, startMinutes, endMinutes)) {
-      setToast({ message: "Move blocked — conflict detected", showRevert: false });
+    const moveCheck = await checkMoveConflicts(entry, payloadBase);
+    if (!moveCheck.ok && moveCheck.reason === "conflict" && moveCheck.conflicts?.length) {
+      setToast({ message: buildConflictMessage(moveCheck.conflicts), showRevert: false });
       setDragging(null);
       setDragTarget(null);
       return;
@@ -920,6 +1025,7 @@ export default function App() {
     }
 
     setMoveSnapshot(snapshot);
+    pushUndoAction({ type: "move", snapshot, label: "Move Class" });
     await refreshAll();
     setDragging(null);
     setDragTarget(null);
@@ -934,30 +1040,62 @@ export default function App() {
     setIsSaving(false);
   };
 
-  const handleRevertMove = async () => {
-    if (!moveSnapshot) return;
-    if (isSaving) return;
-    setIsSaving(true);
-    if (moveSnapshot.createdEntryId) {
-      await fetch(`${API_BASE}/schedule/${moveSnapshot.createdEntryId}`, { method: "DELETE" });
+  const revertMoveSnapshot = async (snapshot: MoveSnapshot) => {
+    if (snapshot.createdEntryId) {
+      await fetch(`${API_BASE}/schedule/${snapshot.createdEntryId}`, { method: "DELETE" });
     }
-    if (moveSnapshot.deletedEntry) {
-      const { id, ...rest } = moveSnapshot.deletedEntry;
+    if (snapshot.deletedEntry) {
+      const { id, ...rest } = snapshot.deletedEntry;
       await fetch(`${API_BASE}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(rest),
       });
     }
-    for (const entry of moveSnapshot.previousEntries) {
+    for (const entry of snapshot.previousEntries) {
       await fetch(`${API_BASE}/schedule/${entry.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(entry),
       });
     }
+  };
+
+  const handleRevertMove = async () => {
+    if (!moveSnapshot) return;
+    if (isSaving) return;
+    setIsSaving(true);
+    await revertMoveSnapshot(moveSnapshot);
     setMoveSnapshot(null);
     setToast({ message: "Move reverted", showRevert: false });
+    await refreshAll();
+    setIsSaving(false);
+  };
+
+  const handleUndo = async () => {
+    if (undoStack.length === 0 || isSaving) return;
+    const [action, ...rest] = undoStack;
+    setUndoStack(rest);
+    setIsSaving(true);
+    if (action.type === "add") {
+      await fetch(`${API_BASE}/schedule/${action.entryId}`, { method: "DELETE" });
+    } else if (action.type === "delete") {
+      const { id, ...restEntry } = action.entry;
+      await fetch(`${API_BASE}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(restEntry),
+      });
+    } else if (action.type === "edit") {
+      await fetch(`${API_BASE}/schedule/${action.entry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action.entry),
+      });
+    } else if (action.type === "move") {
+      await revertMoveSnapshot(action.snapshot);
+    }
+    setToast({ message: `Undid: ${action.label}`, showRevert: false });
     await refreshAll();
     setIsSaving(false);
   };
@@ -1032,11 +1170,21 @@ export default function App() {
     setBlockMenu({ x: event.clientX, y: event.clientY, entry });
   };
 
+  const resetScheduleFormFields = () => {
+    setScheduleForm((prev) =>
+      buildEmptyScheduleForm({
+        Program: prev.Program,
+        Section: prev.Section,
+      })
+    );
+  };
+
   const enterEditMode = (entry: ScheduleEntry) => {
     setFormEditId(entry.id);
     setScheduleForm(entry);
     setFormError("");
     setBlockMenu(null);
+    setSelectedEntryId(entry.id);
     if (panelRef.current) {
       panelRef.current.scrollTo({ top: 0, behavior: "smooth" });
       window.setTimeout(() => {
@@ -1048,11 +1196,14 @@ export default function App() {
   const cancelEditMode = () => {
     setFormEditId(null);
     setFormError("");
+    setSelectedEntryId(null);
+    resetScheduleFormFields();
   };
 
   const saveFormEdit = async () => {
     if (formEditId === null) return;
     if (isSaving) return;
+    const previousEntry = entries.find((item) => item.id === formEditId);
     const parsed = parseLpuRange(scheduleForm["Time (LPU Std)"]);
     if (!parsed) {
       setFormError("Invalid Time (LPU Std). Example: 10:00a-12:00p");
@@ -1072,6 +1223,13 @@ export default function App() {
     });
     setFormEditId(null);
     setToast({ message: "Saved", showRevert: false });
+    if (previousEntry) {
+      pushUndoAction({
+        type: "edit",
+        entry: previousEntry,
+        label: `Edit Class: ${previousEntry["Course Code"]}`,
+      });
+    }
     await refreshAll();
     setIsSaving(false);
   };
@@ -1083,6 +1241,11 @@ export default function App() {
     setIsSaving(true);
     await fetch(`${API_BASE}/schedule/${entry.id}`, { method: "DELETE" });
     setBlockMenu(null);
+    pushUndoAction({
+      type: "delete",
+      entry,
+      label: `Delete Class: ${entry["Course Code"]}`,
+    });
     setToast({ message: "Deleted", showRevert: false });
     await refreshAll();
     setIsSaving(false);
@@ -1107,7 +1270,8 @@ export default function App() {
   const exportTimetablePng = async (
     selectionOverride?: string,
     modeOverride?: ViewMode,
-    force = false
+    force = false,
+    showSuccessToast = true
   ) => {
     const selectionName = selectionOverride ?? currentViewConfig.selected;
     if (!timetableRef.current || !selectionName) return;
@@ -1126,7 +1290,9 @@ export default function App() {
     link.download = `timetable_${modeLabel}_${safeName || "export"}.png`;
     link.href = dataUrl;
     link.click();
-    setToast({ message: "Exported", showRevert: false });
+    if (showSuccessToast) {
+      setToast({ message: "Exported", showRevert: false });
+    }
     if (!force) {
       setIsExporting(false);
     }
@@ -1154,7 +1320,7 @@ export default function App() {
     setExportProgress({ current, total, label: progressLabel, running: true });
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     await new Promise((resolve) => setTimeout(resolve, exportDelayMs));
-    await exportTimetablePng(selectionName, mode, true);
+    await exportTimetablePng(selectionName, mode, true, false);
   };
 
   const exportBatch = async () => {
@@ -1268,11 +1434,19 @@ export default function App() {
       "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
       "Time (24 Hrs)": "",
     };
-    await fetch(`${API_BASE}/schedule`, {
+    const createResponse = await fetch(`${API_BASE}/schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    const created = await createResponse.json();
+    if (created?.id) {
+      pushUndoAction({
+        type: "add",
+        entryId: created.id,
+        label: `Add Class: ${payload["Course Code"]}`,
+      });
+    }
     setScheduleForm((prev) => ({
       ...prev,
       "Course Code": "",
@@ -1290,6 +1464,7 @@ export default function App() {
     setSelectionEnd(null);
     setSelectionOrigin(null);
     setMoveSnapshot(null);
+    setSelectedEntryId(null);
     setToast({ message: "Saved", showRevert: false });
     await refreshAll();
     setIsSaving(false);
@@ -1309,6 +1484,7 @@ export default function App() {
 
   const handleSaveEdit = async () => {
     if (!editEntry || editEntryId === null) return;
+    const previousEntry = entries.find((item) => item.id === editEntryId);
     const timeValue = editEntry["Time (LPU Std)"].trim();
     const daysValue = editEntry.Days.trim();
     const isTbaEntry =
@@ -1341,11 +1517,26 @@ export default function App() {
     });
     setEditEntryId(null);
     setEditEntry(null);
+    if (previousEntry) {
+      pushUndoAction({
+        type: "edit",
+        entry: previousEntry,
+        label: `Edit Class: ${previousEntry["Course Code"]}`,
+      });
+    }
     refreshAll();
   };
 
   const handleDeleteEntry = async (entryId: number) => {
+    const entry = entries.find((item) => item.id === entryId);
     await fetch(`${API_BASE}/schedule/${entryId}`, { method: "DELETE" });
+    if (entry) {
+      pushUndoAction({
+        type: "delete",
+        entry,
+        label: `Delete Class: ${entry["Course Code"]}`,
+      });
+    }
     refreshAll();
   };
 
@@ -1380,26 +1571,16 @@ export default function App() {
     setSelectionEnd(null);
     setSelectionOrigin(null);
     setMoveSnapshot(null);
+    setUndoStack([]);
     setToast(null);
     setFormEditId(null);
-    setScheduleForm({
-      id: 0,
-      "Program": "",
-      "Section": "",
-      "Course Code": "",
-      "Course Description": "",
-      Units: 0,
-      "# of Hours": 0,
-      "Time (LPU Std)": "",
-      "Time (24 Hrs)": "",
-      Days: "",
-      Room: "",
-      Faculty: "",
-    });
+    setSelectedEntryId(null);
+    setScheduleForm(buildEmptyScheduleForm());
     refreshAll();
   };
 
   const handleExportDb = async () => {
+    await persistSettings(customizeSettings);
     const res = await fetch(`${API_BASE}/file/export`);
     const blob = await res.blob();
     downloadBlob(blob, "scheduler.db");
@@ -1411,7 +1592,9 @@ export default function App() {
     const form = new FormData();
     form.append("file", file);
     await fetch(`${API_BASE}/file/import`, { method: "POST", body: form });
-    refreshAll();
+    setUndoStack([]);
+    await refreshAll();
+    loadSettingsFromServer();
   };
 
   const handleImportCsvPreview = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1440,6 +1623,7 @@ export default function App() {
     });
     setCsvImportState(null);
     setIsCsvImporting(false);
+    setUndoStack([]);
     refreshAll();
   };
 
@@ -1701,6 +1885,16 @@ export default function App() {
                   </label>
                 </div>
               ) : null}
+            </div>
+            <div className="menu-group">
+              <button
+                className="menu-button"
+                type="button"
+                onClick={handleUndo}
+                disabled={undoStack.length === 0 || isSaving}
+              >
+                Undo
+              </button>
             </div>
             <div className="menu-group">
               <button
@@ -2582,7 +2776,9 @@ export default function App() {
                           return (
                             <div
                               key={`${entry.id}-${day}`}
-                              className={`block ${conflictSet.has(entry.id) ? "conflict" : ""}`}
+                              className={`block ${conflictSet.has(entry.id) ? "conflict" : ""} ${
+                                selectedEntryId === entry.id ? "selected" : ""
+                              }`}
                               style={{
                                 gridColumn: column,
                                 gridRow: `${startIndex + 1} / ${Math.max(endIndex, startIndex + 1) + 1}`,
@@ -2595,6 +2791,7 @@ export default function App() {
                                 setDragging(null);
                                 setDragTarget(null);
                               }}
+                              onClick={() => enterEditMode(entry)}
                               onContextMenu={(event) => handleBlockContextMenu(event, entry)}
                             >
                               <div className="block-content">
@@ -2659,7 +2856,7 @@ export default function App() {
         </div>
 
         <aside className="panel" ref={panelRef}>
-          <h3>Add Class</h3>
+          <h3>{formEditId ? "Edit Class" : "Add Class"}</h3>
           <label>
             Program
             <input
@@ -2818,11 +3015,11 @@ export default function App() {
             </datalist>
           </label>
           <button onClick={handleCreateSchedule} disabled={isSaving}>
-            {formEditId ? "Save Changes" : "Add Class"}
+            {formEditId ? "Update Class" : "Add Class"}
           </button>
           {formEditId && (
             <button className="secondary-button" onClick={cancelEditMode} disabled={isSaving}>
-              Cancel
+              Cancel Edit
             </button>
           )}
           {formError && <p className="error">{formError}</p>}

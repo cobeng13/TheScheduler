@@ -46,3 +46,10 @@ class Room(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
+
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+
+    id = Column(Integer, primary_key=True)
+    settings_json = Column(Text, nullable=False, default="{}")
