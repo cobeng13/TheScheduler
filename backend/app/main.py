@@ -32,7 +32,7 @@ mimetypes.add_type("application/octet-stream", ".map")
 app = FastAPI(title="Scheduler API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -320,7 +320,12 @@ def import_csv(
     preview: bool = False,
     db: Session = Depends(get_db),
 ):
-    text_stream = io.TextIOWrapper(file.file, encoding="utf-8-sig")
+    payload = file.file.read()
+    try:
+        decoded = payload.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        decoded = payload.decode("cp1252", errors="replace")
+    text_stream = io.StringIO(decoded)
     reader = csv.reader(text_stream)
     header_row = next(reader, [])
 
