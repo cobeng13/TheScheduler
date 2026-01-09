@@ -4,6 +4,7 @@ import base64
 import csv
 import io
 import json
+import mimetypes
 import shutil
 import sys
 from pathlib import Path
@@ -21,6 +22,13 @@ from sqlalchemy.orm import Session
 from . import conflicts, crud, models, reports, schemas, time_utils
 from .db import DATABASE_PATH, SessionLocal, engine
 
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("application/octet-stream", ".map")
+
 app = FastAPI(title="Scheduler API")
 app.add_middleware(
     CORSMiddleware,
@@ -35,7 +43,7 @@ models.Base.metadata.create_all(bind=engine)
 
 
 def get_web_dist() -> Path:
-    if hasattr(sys, "_MEIPASS"):
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / "app" / "web" / "dist"
     return Path(__file__).resolve().parent / "web" / "dist"
 
@@ -506,6 +514,8 @@ def serve_index():
 
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
+    if full_path.startswith("assets/"):
+        return Response(status_code=404)
     web_dist_path = get_web_dist()
     if not web_dist_path.exists():
         return Response(status_code=404)
