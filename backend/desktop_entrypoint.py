@@ -7,6 +7,8 @@ from pathlib import Path
 
 import uvicorn
 
+from app.main import app as fastapi_app
+
 
 def main() -> None:
     root = Path(__file__).resolve().parent
@@ -17,7 +19,7 @@ def main() -> None:
         webbrowser.open("http://127.0.0.1:8000")
 
     threading.Timer(1.0, open_browser).start()
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(fastapi_app, host="127.0.0.1", port=8000, log_level="info")
 
 
 if __name__ == "__main__":

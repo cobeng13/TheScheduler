@@ -15,7 +15,10 @@ xcopy /e /i /y "frontend\dist\*" "%DIST_DIR%\"
 
 echo Building executable...
 pushd backend
-pyinstaller --onefile --name TheScheduler --distpath dist --add-data "app\web\dist;app\web\dist" desktop_entrypoint.py
+if exist dist rmdir /s /q dist
+if exist build rmdir /s /q build
+if exist TheScheduler.spec del /f /q TheScheduler.spec
+pyinstaller --onefile --name TheScheduler --distpath dist --add-data "app\web\dist;app\web\dist" --collect-submodules app --hidden-import app --hidden-import app.main desktop_entrypoint.py
 popd
 
 echo Done.
