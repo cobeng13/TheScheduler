@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import shutil
+import sys
 from pathlib import Path
 from uuid import uuid4
 from typing import List
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -30,6 +32,18 @@ app.add_middleware(
 
 
 models.Base.metadata.create_all(bind=engine)
+
+
+def get_web_dist() -> Path:
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "app" / "web" / "dist"
+    return Path(__file__).resolve().parent / "web" / "dist"
+
+
+web_dist = get_web_dist()
+assets_dir = web_dist / "assets"
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 
 def get_db():
@@ -480,3 +494,25 @@ def export_png(payload: dict):
     file_path = base_dir / f"{name}.png"
     file_path.write_bytes(data)
     return {"ok": True, "path": str(file_path)}
+
+
+@app.get("/")
+def serve_index():
+    index_path = get_web_dist() / "index.html"
+    if not index_path.exists():
+        return Response(status_code=404)
+    return FileResponse(index_path)
+
+
+@app.get("/{full_path:path}")
+def serve_spa(full_path: str):
+    web_dist_path = get_web_dist()
+    if not web_dist_path.exists():
+        return Response(status_code=404)
+    target = web_dist_path / full_path
+    if target.is_file():
+        return FileResponse(target)
+    index_path = web_dist_path / "index.html"
+    if not index_path.exists():
+        return Response(status_code=404)
+    return FileResponse(index_path)
