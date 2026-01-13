@@ -72,6 +72,7 @@ type CustomizeSettings = {
     showFaculty: boolean;
     useFacultyColors: boolean;
   };
+  classBlockFontSizePx: number;
   facultyColors: Record<string, string>;
   sectionBgColors: Record<string, string>;
 };
@@ -86,6 +87,7 @@ const defaultCustomizeSettings: CustomizeSettings = {
     showFaculty: true,
     useFacultyColors: false,
   },
+  classBlockFontSizePx: 12,
   facultyColors: {},
   sectionBgColors: {},
 };
@@ -93,6 +95,8 @@ const defaultCustomizeSettings: CustomizeSettings = {
 const normalizeCustomizeSettings = (settings: Partial<CustomizeSettings> | null) => ({
   ...defaultCustomizeSettings,
   ...settings,
+  classBlockFontSizePx:
+    settings?.classBlockFontSizePx ?? defaultCustomizeSettings.classBlockFontSizePx,
   blockDisplay: {
     ...defaultCustomizeSettings.blockDisplay,
     ...settings?.blockDisplay,
@@ -1212,6 +1216,14 @@ export default function App() {
     }
     setIsSaving(true);
     const payload = { ...scheduleForm, Days: normalizedDays };
+    const editCheck = await checkMoveConflicts(
+      { ...payload, id: formEditId } as ScheduleEntry,
+      payload
+    );
+    if (!editCheck.ok && editCheck.reason === "conflict" && editCheck.conflicts?.length) {
+      setFormError(buildConflictMessage(editCheck.conflicts));
+      return;
+    }
     await fetch(`${API_BASE}/schedule/${formEditId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1425,6 +1437,11 @@ export default function App() {
       "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
       "Time (24 Hrs)": "",
     };
+    const createCheck = await checkMoveConflicts({ ...payload, id: 0 } as ScheduleEntry, payload);
+    if (!createCheck.ok && createCheck.reason === "conflict" && createCheck.conflicts?.length) {
+      setFormError(buildConflictMessage(createCheck.conflicts));
+      return;
+    }
     const createResponse = await fetch(`${API_BASE}/schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1501,6 +1518,14 @@ export default function App() {
       "Time (LPU Std)": isTbaEntry ? "TBA" : editEntry["Time (LPU Std)"],
       "Time (24 Hrs)": "",
     };
+    const editCheck = await checkMoveConflicts(
+      { ...payload, id: editEntryId } as ScheduleEntry,
+      payload
+    );
+    if (!editCheck.ok && editCheck.reason === "conflict" && editCheck.conflicts?.length) {
+      setEditError(buildConflictMessage(editCheck.conflicts));
+      return;
+    }
     await fetch(`${API_BASE}/schedule/${editEntryId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1634,6 +1659,14 @@ export default function App() {
         ...prev.blockDisplay,
         [key]: value,
       },
+    }));
+  };
+
+  const updateClassBlockFontSize = (value: number) => {
+    const nextValue = Math.min(24, Math.max(8, value));
+    setCustomizeSettings((prev) => ({
+      ...prev,
+      classBlockFontSizePx: nextValue,
     }));
   };
 
@@ -1797,6 +1830,7 @@ export default function App() {
   const rowHeight = `${40 * (zoomPercent / 100)}px`;
   const fontSize = `${12 * (zoomPercent / 100)}px`;
   const blockPadding = `${6 * (zoomPercent / 100)}px`;
+  const blockFontSize = `${customizeSettings.classBlockFontSizePx * (zoomPercent / 100)}px`;
 
   const currentIndex = useMemo(
     () =>
@@ -2277,6 +2311,25 @@ export default function App() {
                 />
                 Use faculty colors for class blocks
               </label>
+              <label className="menu-checkbox">
+                <span>Class block font size (px)</span>
+                <div className="input-row">
+                  <input
+                    type="range"
+                    min={8}
+                    max={24}
+                    value={customizeSettings.classBlockFontSizePx}
+                    onChange={(event) => updateClassBlockFontSize(Number(event.target.value))}
+                  />
+                  <input
+                    type="number"
+                    min={8}
+                    max={24}
+                    value={customizeSettings.classBlockFontSizePx}
+                    onChange={(event) => updateClassBlockFontSize(Number(event.target.value))}
+                  />
+                </div>
+              </label>
             </div>
             <div className="modal-section">
               <h4>Faculty Colors</h4>
@@ -2706,6 +2759,7 @@ export default function App() {
                       gridTemplateRows: `repeat(${slots.length}, var(--row-height))`,
                       ["--row-height" as string]: rowHeight,
                       ["--font-size" as string]: fontSize,
+                      ["--block-font-size" as string]: blockFontSize,
                       ["--block-padding" as string]: blockPadding,
                     }}
                   >
