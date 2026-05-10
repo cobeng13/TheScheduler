@@ -1,7 +1,47 @@
-backend/.venv/
-backend/__pycache__/
-backend/*.db
-backend/.pytest_cache/
-frontend/node_modules/
-frontend/dist/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.db
+
+# Virtual environments / Conda
+.venv/
+venv/
+env/
+.conda/
+conda-meta/
+*.egg-info/
+
+# Node / Vite
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri / desktop builds
+src-tauri/target/
+target/
+backend/build/
+backend/dist/
+backend/app/web/dist/
+*.spec.log
+
+# Windows / macOS / editor
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
 .DS_Store
+
+# Logs
+*.log
