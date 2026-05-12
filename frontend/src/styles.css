@@ -274,6 +274,33 @@ body {
   border-radius: 4px;
 }
 
+.course-description-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 48vh;
+  overflow: auto;
+}
+
+.course-description-choice {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.course-description-choice span {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.course-description-choice select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
 .color-input {
   display: flex;
   align-items: center;

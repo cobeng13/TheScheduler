@@ -45,6 +45,13 @@ type CsvImportSummary = {
   errors: Array<{ row_index: number; reason: string }>;
 };
 
+type CourseDescriptionConflict = {
+  codeKey: string;
+  code: string;
+  descriptions: string[];
+  entryIdsByDescription: Record<string, number[]>;
+};
+
 type ViewMode = "text" | "timetable-section" | "timetable-faculty" | "timetable-room";
 
 type Selection = {
@@ -483,6 +490,12 @@ export default function App() {
   } | null>(null);
   const [isCsvImporting, setIsCsvImporting] = useState(false);
   const [csvInputKey, setCsvInputKey] = useState(0);
+  const [courseDescriptionSelections, setCourseDescriptionSelections] = useState<
+    Record<string, string>
+  >({});
+  const [courseDescriptionPromptDismissedFor, setCourseDescriptionPromptDismissedFor] =
+    useState("");
+  const [isCourseDescriptionFixing, setIsCourseDescriptionFixing] = useState(false);
   const [customizeSettings, setCustomizeSettings] =
     useState<CustomizeSettings>(defaultCustomizeSettings);
   const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
@@ -821,6 +834,175 @@ export default function App() {
       )
       .reduce((total, entry) => total + getEntryWeeklyHours(entry), 0);
     return roundHours(existingHours + candidateHours);
+  };
+
+  const courseDescriptionCatalog = useMemo(() => {
+    const descriptionsByCode: Record<string, Map<string, { label: string; ids: number[] }>> = {};
+    const displayCodeByKey: Record<string, string> = {};
+    entries.forEach((entry) => {
+      const code = entry["Course Code"].trim();
+      const description = entry["Course Description"].trim();
+      if (!code || !description) return;
+      const codeKey = normalizeMatchValue(code);
+      const descriptionKey = normalizeMatchValue(description);
+      displayCodeByKey[codeKey] = displayCodeByKey[codeKey] ?? code;
+      if (!descriptionsByCode[codeKey]) {
+        descriptionsByCode[codeKey] = new Map();
+      }
+      const existing = descriptionsByCode[codeKey].get(descriptionKey);
+      if (existing) {
+        existing.ids.push(entry.id);
+      } else {
+        descriptionsByCode[codeKey].set(descriptionKey, {
+          label: description,
+          ids: [entry.id],
+        });
+      }
+    });
+
+    const canonicalDescriptions: Record<string, string> = {};
+    const conflicts: CourseDescriptionConflict[] = [];
+    Object.entries(descriptionsByCode).forEach(([codeKey, descriptions]) => {
+      const sortedDescriptions = [...descriptions.values()].sort((left, right) => {
+        if (right.ids.length !== left.ids.length) {
+          return right.ids.length - left.ids.length;
+        }
+        return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
+      });
+      canonicalDescriptions[codeKey] = sortedDescriptions[0]?.label ?? "";
+      if (sortedDescriptions.length > 1) {
+        conflicts.push({
+          codeKey,
+          code: displayCodeByKey[codeKey],
+          descriptions: sortedDescriptions.map((item) => item.label),
+          entryIdsByDescription: Object.fromEntries(
+            sortedDescriptions.map((item) => [item.label, item.ids])
+          ),
+        });
+      }
+    });
+
+    return {
+      canonicalDescriptions,
+      conflicts: conflicts.sort((left, right) =>
+        left.code.localeCompare(right.code, undefined, { sensitivity: "base" })
+      ),
+      courseCodes: Object.values(displayCodeByKey).sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base" })
+      ),
+    };
+  }, [entries]);
+
+  const courseDescriptionConflictSignature = useMemo(
+    () =>
+      courseDescriptionCatalog.conflicts
+        .map((conflict) => `${conflict.codeKey}:${conflict.descriptions.join("|")}`)
+        .join(";"),
+    [courseDescriptionCatalog.conflicts]
+  );
+
+  const activeCourseDescriptionConflicts =
+    courseDescriptionConflictSignature &&
+    courseDescriptionPromptDismissedFor !== courseDescriptionConflictSignature
+      ? courseDescriptionCatalog.conflicts
+      : [];
+
+  useEffect(() => {
+    if (!courseDescriptionConflictSignature) return;
+    setCourseDescriptionSelections((prev) => {
+      const next = { ...prev };
+      courseDescriptionCatalog.conflicts.forEach((conflict) => {
+        if (!next[conflict.codeKey] || !conflict.descriptions.includes(next[conflict.codeKey])) {
+          next[conflict.codeKey] =
+            courseDescriptionCatalog.canonicalDescriptions[conflict.codeKey] ??
+            conflict.descriptions[0];
+        }
+      });
+      return next;
+    });
+  }, [courseDescriptionCatalog, courseDescriptionConflictSignature]);
+
+  const getCanonicalCourseDescription = (courseCode: string) =>
+    courseDescriptionCatalog.canonicalDescriptions[normalizeMatchValue(courseCode)] ?? "";
+
+  const withCanonicalCourseDescription = (entry: ScheduleEntry) => {
+    const canonical = getCanonicalCourseDescription(entry["Course Code"]);
+    if (!canonical) return entry;
+    return { ...entry, "Course Description": canonical };
+  };
+
+  const updateMatchingCourseDescriptions = async (source: ScheduleEntry) => {
+    const codeKey = normalizeMatchValue(source["Course Code"]);
+    const description = source["Course Description"].trim();
+    if (!codeKey || !description) return;
+    const updates = entries
+      .filter(
+        (entry) =>
+          normalizeMatchValue(entry["Course Code"]) === codeKey &&
+          entry["Course Description"].trim() !== description
+      )
+      .map((entry) =>
+        fetch(`${API_BASE}/schedule/${entry.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...entry, "Course Description": description }),
+        })
+      );
+    await Promise.all(updates);
+  };
+
+  const applyCourseCodeToScheduleForm = (courseCode: string) => {
+    const canonical = getCanonicalCourseDescription(courseCode);
+    setScheduleForm((prev) => ({
+      ...prev,
+      "Course Code": courseCode,
+      "Course Description": canonical || prev["Course Description"],
+    }));
+  };
+
+  const applyCourseCodeToEditEntry = (courseCode: string) => {
+    const canonical = getCanonicalCourseDescription(courseCode);
+    setEditEntry((prev) =>
+      prev
+        ? {
+            ...prev,
+            "Course Code": courseCode,
+            "Course Description": canonical || prev["Course Description"],
+          }
+        : prev
+    );
+  };
+
+  const applyCourseDescriptionFixes = async () => {
+    if (activeCourseDescriptionConflicts.length === 0 || isCourseDescriptionFixing) return;
+    setIsCourseDescriptionFixing(true);
+    const updates = activeCourseDescriptionConflicts.flatMap((conflict) => {
+      const selectedDescription =
+        courseDescriptionSelections[conflict.codeKey] ??
+        courseDescriptionCatalog.canonicalDescriptions[conflict.codeKey] ??
+        conflict.descriptions[0];
+      return entries
+        .filter(
+          (entry) =>
+            normalizeMatchValue(entry["Course Code"]) === conflict.codeKey &&
+            entry["Course Description"].trim() !== selectedDescription
+        )
+        .map((entry) =>
+          fetch(`${API_BASE}/schedule/${entry.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...entry,
+              "Course Description": selectedDescription,
+            }),
+          })
+        );
+    });
+    await Promise.all(updates);
+    setCourseDescriptionPromptDismissedFor(courseDescriptionConflictSignature);
+    setToast({ message: "Course descriptions fixed", showRevert: false });
+    await refreshAll();
+    setIsCourseDescriptionFixing(false);
   };
 
   const withCalculatedHours = (entry: ScheduleEntry, entryId: number | null) => ({
@@ -1310,11 +1492,14 @@ export default function App() {
     const { entry, day } = blockMenu;
     const nextDay = getNextDay(day);
     if (!nextDay) return;
-    const payload = withCalculatedHours({
-      ...entry,
-      id: 0,
-      Days: nextDay,
-    }, null);
+    const payload = withCalculatedHours(
+      withCanonicalCourseDescription({
+        ...entry,
+        id: 0,
+        Days: nextDay,
+      }),
+      null
+    );
     const duplicateCheck = await checkMoveConflicts(payload, payload);
     if (
       !duplicateCheck.ok &&
@@ -1333,6 +1518,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
       await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
@@ -1391,7 +1577,10 @@ export default function App() {
       return;
     }
     setIsSaving(true);
-    const payload = withCalculatedHours({ ...scheduleForm, Days: normalizedDays }, formEditId);
+    const payload = withCalculatedHours(
+      withCanonicalCourseDescription({ ...scheduleForm, Days: normalizedDays }),
+      formEditId
+    );
     await ensureEntityExists("sections", payload.Section, sections);
     await ensureEntityExists("faculty", payload.Faculty, faculty);
     await ensureEntityExists("rooms", payload.Room, rooms);
@@ -1409,6 +1598,7 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    await updateMatchingCourseDescriptions(payload);
     await updateMatchingCourseSectionHours(payload, formEditId);
     if (
       previousEntry &&
@@ -1621,12 +1811,15 @@ export default function App() {
     await ensureEntityExists("faculty", scheduleForm.Faculty, faculty);
     await ensureEntityExists("rooms", scheduleForm.Room, rooms);
 
-    const payload = withCalculatedHours({
-      ...scheduleForm,
-      Days: normalizedDays,
-      "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
-      "Time (24 Hrs)": "",
-    }, null);
+    const payload = withCalculatedHours(
+      withCanonicalCourseDescription({
+        ...scheduleForm,
+        Days: normalizedDays,
+        "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
+        "Time (24 Hrs)": "",
+      }),
+      null
+    );
     const createCheck = await checkMoveConflicts({ ...payload, id: 0 } as ScheduleEntry, payload);
     if (!createCheck.ok && createCheck.reason === "conflict" && createCheck.conflicts?.length) {
       setFormError(buildConflictMessage(createCheck.conflicts));
@@ -1640,6 +1833,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
       await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
@@ -1704,12 +1898,15 @@ export default function App() {
       setEditError("Invalid Days. Example: M,W,F");
       return;
     }
-    const payload = withCalculatedHours({
-      ...editEntry,
-      Days: normalizedDays,
-      "Time (LPU Std)": isTbaEntry ? "TBA" : editEntry["Time (LPU Std)"],
-      "Time (24 Hrs)": "",
-    }, editEntryId);
+    const payload = withCalculatedHours(
+      withCanonicalCourseDescription({
+        ...editEntry,
+        Days: normalizedDays,
+        "Time (LPU Std)": isTbaEntry ? "TBA" : editEntry["Time (LPU Std)"],
+        "Time (24 Hrs)": "",
+      }),
+      editEntryId
+    );
     await ensureEntityExists("sections", payload.Section, sections);
     await ensureEntityExists("faculty", payload.Faculty, faculty);
     await ensureEntityExists("rooms", payload.Room, rooms);
@@ -1726,6 +1923,7 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    await updateMatchingCourseDescriptions(payload);
     await updateMatchingCourseSectionHours(payload, editEntryId);
     if (
       previousEntry &&
@@ -2493,6 +2691,69 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {activeCourseDescriptionConflicts.length > 0 ? (
+        <div className="modal-overlay">
+          <div className="modal modal-wide">
+            <div className="modal-header">
+              <h3>Course Description Match</h3>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() =>
+                  setCourseDescriptionPromptDismissedFor(courseDescriptionConflictSignature)
+                }
+              >
+                x
+              </button>
+            </div>
+            <p>Select the description to use for each course code.</p>
+            <div className="course-description-list">
+              {activeCourseDescriptionConflicts.map((conflict) => (
+                <label key={conflict.codeKey} className="course-description-choice">
+                  <span>{conflict.code}</span>
+                  <select
+                    value={
+                      courseDescriptionSelections[conflict.codeKey] ??
+                      courseDescriptionCatalog.canonicalDescriptions[conflict.codeKey] ??
+                      conflict.descriptions[0]
+                    }
+                    onChange={(event) =>
+                      setCourseDescriptionSelections((prev) => ({
+                        ...prev,
+                        [conflict.codeKey]: event.target.value,
+                      }))
+                    }
+                  >
+                    {conflict.descriptions.map((description) => (
+                      <option key={description} value={description}>
+                        {description} ({conflict.entryIdsByDescription[description]?.length ?? 0})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() =>
+                  setCourseDescriptionPromptDismissedFor(courseDescriptionConflictSignature)
+                }
+                disabled={isCourseDescriptionFixing}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={applyCourseDescriptionFixes}
+                disabled={isCourseDescriptionFixing}
+              >
+                {isCourseDescriptionFixing ? "Updating..." : "Apply"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {isCustomizeOpen ? (
         <div className="modal-overlay">
           <div className="modal modal-wide" ref={customizeModalRef}>
@@ -2831,9 +3092,28 @@ export default function App() {
                                   ? editEntry["Time (24 Hrs)"] ?? ""
                                   : String(editEntry[header])
                               }
-                              readOnly={header === "Time (24 Hrs)"}
+                              list={header === "Course Code" ? "course-code-list" : undefined}
+                              readOnly={
+                                header === "Time (24 Hrs)" ||
+                                (header === "Course Description" &&
+                                  Boolean(getCanonicalCourseDescription(editEntry["Course Code"])))
+                              }
                               onChange={(event) => {
                                 const value = event.target.value;
+                                if (header === "Course Code") {
+                                  applyCourseCodeToEditEntry(value);
+                                  return;
+                                }
+                                if (header === "Course Description") {
+                                  const canonical = getCanonicalCourseDescription(
+                                    editEntry["Course Code"]
+                                  );
+                                  setEditEntry({
+                                    ...editEntry,
+                                    "Course Description": canonical || value,
+                                  });
+                                  return;
+                                }
                                 if (header === "Time (LPU Std)") {
                                   const parsed = parseLpuRange(value);
                                   const isTbaValue =
@@ -3191,24 +3471,31 @@ export default function App() {
             <input
               ref={courseCodeRef}
               value={scheduleForm["Course Code"]}
-              onChange={(event) =>
-                setScheduleForm({
-                  ...scheduleForm,
-                  "Course Code": event.target.value,
-                })
-              }
+              onChange={(event) => applyCourseCodeToScheduleForm(event.target.value)}
+              list="course-code-list"
             />
+            <datalist id="course-code-list">
+              {courseDescriptionCatalog.courseCodes.map((courseCode) => (
+                <option
+                  key={courseCode}
+                  value={courseCode}
+                  label={getCanonicalCourseDescription(courseCode)}
+                />
+              ))}
+            </datalist>
           </label>
           <label>
             Course Description
             <input
               value={scheduleForm["Course Description"]}
-              onChange={(event) =>
+              readOnly={Boolean(getCanonicalCourseDescription(scheduleForm["Course Code"]))}
+              onChange={(event) => {
+                const canonical = getCanonicalCourseDescription(scheduleForm["Course Code"]);
                 setScheduleForm({
                   ...scheduleForm,
-                  "Course Description": event.target.value,
-                })
-              }
+                  "Course Description": canonical || event.target.value,
+                });
+              }}
             />
           </label>
           <label>
