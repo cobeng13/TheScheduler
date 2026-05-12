@@ -582,6 +582,32 @@ body {
   pointer-events: auto;
 }
 
+.toast.global {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+  margin-bottom: 0;
+  min-width: 180px;
+  max-width: min(360px, calc(100vw - 32px));
+  background: #ffffff;
+  border-color: #bfd6c9;
+  box-shadow: 0 10px 30px rgba(30, 45, 62, 0.14);
+  color: #183326;
+  animation: toast-in 160ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .timetable-empty {
   text-align: center;
   color: #5b6b85;
@@ -719,6 +745,40 @@ body {
   overflow: auto;
 }
 
+.panel.editing {
+  border: 3px solid #d36b00;
+  box-shadow: 0 0 0 4px rgba(211, 107, 0, 0.16);
+}
+
+.edit-mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #fff2df;
+  border: 1px solid #d36b00;
+  border-radius: 6px;
+  color: #3f2a12;
+  padding: 10px;
+  margin-bottom: 14px;
+}
+
+.edit-mode-banner div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.edit-mode-banner strong {
+  font-size: 0.9rem;
+}
+
+.edit-mode-banner span {
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 .panel h3 {
   margin-top: 0;
   font-size: 1rem;
@@ -759,6 +819,13 @@ body {
   background: #e9eef6;
   color: #2f3b52;
   border: 1px solid #ccd3df;
+}
+
+.panel .compact-button {
+  width: auto;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  padding: 6px 10px;
 }
 
 .panel button:hover {

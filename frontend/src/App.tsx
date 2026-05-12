@@ -217,6 +217,22 @@ const parseLpuRange = (range: string) => {
   return { time24, startMinutes, endMinutes };
 };
 
+const normalizeMatchValue = (value: string) => value.trim().toLowerCase();
+
+const roundHours = (value: number) => Number(value.toFixed(2));
+
+const getEntryWeeklyHours = (entry: ScheduleEntry) => {
+  const parsed24 = parseTimeRange(entry["Time (24 Hrs)"]);
+  const parsedLpu = parseLpuRange(entry["Time (LPU Std)"]);
+  const startMinutes = parsed24?.start ?? parsedLpu?.startMinutes;
+  const endMinutes = parsed24?.end ?? parsedLpu?.endMinutes;
+  const dayCount = splitDays(entry.Days).length;
+  if (startMinutes === undefined || endMinutes === undefined || dayCount === 0) {
+    return 0;
+  }
+  return ((endMinutes - startMinutes) / 60) * dayCount;
+};
+
 const getReadableTextColor = (hex: string) => {
   const cleaned = hex.replace("#", "");
   if (cleaned.length !== 6) return "#ffffff";
@@ -358,7 +374,7 @@ const normalizeDays = (value: string) => {
     sun: "Su",
     sunday: "Su",
   };
-  const cleaned = value.replace("/", ",").replace(/\s+/g, ",");
+  const cleaned = value.replace(/\//g, ",").replace(/\s+/g, ",");
   const parts = cleaned.split(",").filter(Boolean);
   const tokens: string[] =
     parts.length === 1 && parts[0].length > 2 && /^[a-z]+$/i.test(parts[0])
@@ -393,9 +409,12 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
-  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; entry: ScheduleEntry } | null>(
-    null
-  );
+  const [blockMenu, setBlockMenu] = useState<{
+    x: number;
+    y: number;
+    entry: ScheduleEntry;
+    day: string;
+  } | null>(null);
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<typeof canonicalHeaders[number]>(
     "Course Code"
@@ -783,6 +802,102 @@ export default function App() {
     selectedRoom,
   ]);
 
+  const calculateCourseSectionTotalHours = (
+    candidate: ScheduleEntry,
+    candidateId: number | null
+  ) => {
+    const sectionKey = normalizeMatchValue(candidate.Section);
+    const courseKey = normalizeMatchValue(candidate["Course Code"]);
+    const candidateHours = getEntryWeeklyHours(candidate);
+    if (!sectionKey || !courseKey) {
+      return roundHours(candidateHours);
+    }
+    const existingHours = entries
+      .filter(
+        (entry) =>
+          entry.id !== candidateId &&
+          normalizeMatchValue(entry.Section) === sectionKey &&
+          normalizeMatchValue(entry["Course Code"]) === courseKey
+      )
+      .reduce((total, entry) => total + getEntryWeeklyHours(entry), 0);
+    return roundHours(existingHours + candidateHours);
+  };
+
+  const withCalculatedHours = (entry: ScheduleEntry, entryId: number | null) => ({
+    ...entry,
+    "# of Hours": calculateCourseSectionTotalHours(entry, entryId),
+  });
+
+  const updateMatchingCourseSectionHours = async (
+    source: ScheduleEntry,
+    sourceId: number | null
+  ) => {
+    const sectionKey = normalizeMatchValue(source.Section);
+    const courseKey = normalizeMatchValue(source["Course Code"]);
+    if (!sectionKey || !courseKey) return;
+    const totalHours = calculateCourseSectionTotalHours(source, sourceId);
+    const updates = entries
+      .filter(
+        (entry) =>
+          entry.id !== sourceId &&
+          normalizeMatchValue(entry.Section) === sectionKey &&
+          normalizeMatchValue(entry["Course Code"]) === courseKey &&
+          entry["# of Hours"] !== totalHours
+      )
+      .map((entry) =>
+        fetch(`${API_BASE}/schedule/${entry.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...entry, "# of Hours": totalHours }),
+        })
+      );
+    await Promise.all(updates);
+  };
+
+  const updateCourseSectionHoursAfterRemoval = async (removed: ScheduleEntry) => {
+    const sectionKey = normalizeMatchValue(removed.Section);
+    const courseKey = normalizeMatchValue(removed["Course Code"]);
+    if (!sectionKey || !courseKey) return;
+    const remaining = entries.filter(
+      (entry) =>
+        entry.id !== removed.id &&
+        normalizeMatchValue(entry.Section) === sectionKey &&
+        normalizeMatchValue(entry["Course Code"]) === courseKey
+    );
+    const totalHours = roundHours(
+      remaining.reduce((total, entry) => total + getEntryWeeklyHours(entry), 0)
+    );
+    await Promise.all(
+      remaining
+        .filter((entry) => entry["# of Hours"] !== totalHours)
+        .map((entry) =>
+          fetch(`${API_BASE}/schedule/${entry.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...entry, "# of Hours": totalHours }),
+          })
+        )
+    );
+  };
+
+  useEffect(() => {
+    setScheduleForm((prev) => {
+      const calculatedHours = calculateCourseSectionTotalHours(prev, formEditId);
+      if (prev["# of Hours"] === calculatedHours) {
+        return prev;
+      }
+      return { ...prev, "# of Hours": calculatedHours };
+    });
+  }, [
+    entries,
+    formEditId,
+    scheduleForm.Section,
+    scheduleForm["Course Code"],
+    scheduleForm["Time (LPU Std)"],
+    scheduleForm["Time (24 Hrs)"],
+    scheduleForm.Days,
+  ]);
+
   useEffect(() => {
     if (!viewMode.startsWith("timetable")) {
       return;
@@ -1156,18 +1271,79 @@ export default function App() {
     const time24 = `${formatMinutes(selectionRange.startMinutes)}-${formatMinutes(
       selectionRange.endMinutes
     )}`;
-    setScheduleForm((prev) => ({
-      ...prev,
+    setFormEditId(null);
+    setSelectedEntryId(null);
+    setFormError("");
+    setScheduleForm({
+      ...buildEmptyScheduleForm(),
+      Section: viewMode === "timetable-section" ? currentViewConfig.selected : "",
       "Time (24 Hrs)": time24,
-      "Time (LPU Std)": prev["Time (LPU Std)"] || toLpuLabel(selectionRange.startMinutes, selectionRange.endMinutes),
+      "Time (LPU Std)": toLpuLabel(selectionRange.startMinutes, selectionRange.endMinutes),
       Days: selectionRange.day,
-    }));
+    });
     setContextMenu(null);
+    if (panelRef.current) {
+      panelRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      window.setTimeout(() => {
+        courseCodeRef.current?.focus();
+      }, 150);
+    }
   };
 
-  const handleBlockContextMenu = (event: React.MouseEvent, entry: ScheduleEntry) => {
+  const getNextDay = (day: string) => {
+    const index = daysOfWeek.indexOf(day);
+    if (index === -1) return "";
+    return daysOfWeek[(index + 1) % daysOfWeek.length];
+  };
+
+  const handleBlockContextMenu = (
+    event: React.MouseEvent,
+    entry: ScheduleEntry,
+    day: string
+  ) => {
     event.preventDefault();
-    setBlockMenu({ x: event.clientX, y: event.clientY, entry });
+    setBlockMenu({ x: event.clientX, y: event.clientY, entry, day });
+  };
+
+  const duplicateEntryToNextDay = async () => {
+    if (!blockMenu || isSaving) return;
+    const { entry, day } = blockMenu;
+    const nextDay = getNextDay(day);
+    if (!nextDay) return;
+    const payload = withCalculatedHours({
+      ...entry,
+      id: 0,
+      Days: nextDay,
+    }, null);
+    const duplicateCheck = await checkMoveConflicts(payload, payload);
+    if (
+      !duplicateCheck.ok &&
+      duplicateCheck.reason === "conflict" &&
+      duplicateCheck.conflicts?.length
+    ) {
+      setToast({ message: buildConflictMessage(duplicateCheck.conflicts), showRevert: false });
+      setBlockMenu(null);
+      return;
+    }
+    setIsSaving(true);
+    const createResponse = await fetch(`${API_BASE}/schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const created = await createResponse.json();
+    if (created?.id) {
+      await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
+      pushUndoAction({
+        type: "add",
+        entryId: created.id,
+        label: `Duplicate Class: ${entry["Course Code"]}`,
+      });
+      setToast({ message: `Duplicated to ${dayLabels[nextDay]}`, showRevert: false });
+    }
+    setBlockMenu(null);
+    await refreshAll();
+    setIsSaving(false);
   };
 
   const resetScheduleFormFields = () => {
@@ -1215,13 +1391,17 @@ export default function App() {
       return;
     }
     setIsSaving(true);
-    const payload = { ...scheduleForm, Days: normalizedDays };
+    const payload = withCalculatedHours({ ...scheduleForm, Days: normalizedDays }, formEditId);
+    await ensureEntityExists("sections", payload.Section, sections);
+    await ensureEntityExists("faculty", payload.Faculty, faculty);
+    await ensureEntityExists("rooms", payload.Room, rooms);
     const editCheck = await checkMoveConflicts(
       { ...payload, id: formEditId } as ScheduleEntry,
       payload
     );
     if (!editCheck.ok && editCheck.reason === "conflict" && editCheck.conflicts?.length) {
       setFormError(buildConflictMessage(editCheck.conflicts));
+      setIsSaving(false);
       return;
     }
     await fetch(`${API_BASE}/schedule/${formEditId}`, {
@@ -1229,8 +1409,17 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    await updateMatchingCourseSectionHours(payload, formEditId);
+    if (
+      previousEntry &&
+      (normalizeMatchValue(previousEntry.Section) !== normalizeMatchValue(payload.Section) ||
+        normalizeMatchValue(previousEntry["Course Code"]) !==
+          normalizeMatchValue(payload["Course Code"]))
+    ) {
+      await updateCourseSectionHoursAfterRemoval(previousEntry);
+    }
     setFormEditId(null);
-    setToast({ message: "Saved", showRevert: false });
+    setToast({ message: formEditId ? "Class updated" : "Class added", showRevert: false });
     if (previousEntry) {
       pushUndoAction({
         type: "edit",
@@ -1248,6 +1437,7 @@ export default function App() {
     if (!confirmed) return;
     setIsSaving(true);
     await fetch(`${API_BASE}/schedule/${entry.id}`, { method: "DELETE" });
+    await updateCourseSectionHoursAfterRemoval(entry);
     setBlockMenu(null);
     pushUndoAction({
       type: "delete",
@@ -1431,15 +1621,16 @@ export default function App() {
     await ensureEntityExists("faculty", scheduleForm.Faculty, faculty);
     await ensureEntityExists("rooms", scheduleForm.Room, rooms);
 
-    const payload = {
+    const payload = withCalculatedHours({
       ...scheduleForm,
       Days: normalizedDays,
       "Time (LPU Std)": isTbaEntry ? "TBA" : scheduleForm["Time (LPU Std)"],
       "Time (24 Hrs)": "",
-    };
+    }, null);
     const createCheck = await checkMoveConflicts({ ...payload, id: 0 } as ScheduleEntry, payload);
     if (!createCheck.ok && createCheck.reason === "conflict" && createCheck.conflicts?.length) {
       setFormError(buildConflictMessage(createCheck.conflicts));
+      setIsSaving(false);
       return;
     }
     const createResponse = await fetch(`${API_BASE}/schedule`, {
@@ -1449,6 +1640,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
+      await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
         entryId: created.id,
@@ -1473,7 +1665,7 @@ export default function App() {
     setSelectionOrigin(null);
     setMoveSnapshot(null);
     setSelectedEntryId(null);
-    setToast({ message: "Saved", showRevert: false });
+    setToast({ message: "Class added", showRevert: false });
     await refreshAll();
     setIsSaving(false);
   };
@@ -1512,12 +1704,15 @@ export default function App() {
       setEditError("Invalid Days. Example: M,W,F");
       return;
     }
-    const payload = {
+    const payload = withCalculatedHours({
       ...editEntry,
       Days: normalizedDays,
       "Time (LPU Std)": isTbaEntry ? "TBA" : editEntry["Time (LPU Std)"],
       "Time (24 Hrs)": "",
-    };
+    }, editEntryId);
+    await ensureEntityExists("sections", payload.Section, sections);
+    await ensureEntityExists("faculty", payload.Faculty, faculty);
+    await ensureEntityExists("rooms", payload.Room, rooms);
     const editCheck = await checkMoveConflicts(
       { ...payload, id: editEntryId } as ScheduleEntry,
       payload
@@ -1531,6 +1726,15 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    await updateMatchingCourseSectionHours(payload, editEntryId);
+    if (
+      previousEntry &&
+      (normalizeMatchValue(previousEntry.Section) !== normalizeMatchValue(payload.Section) ||
+        normalizeMatchValue(previousEntry["Course Code"]) !==
+          normalizeMatchValue(payload["Course Code"]))
+    ) {
+      await updateCourseSectionHoursAfterRemoval(previousEntry);
+    }
     setEditEntryId(null);
     setEditEntry(null);
     if (previousEntry) {
@@ -1547,6 +1751,9 @@ export default function App() {
     const entry = entries.find((item) => item.id === entryId);
     await fetch(`${API_BASE}/schedule/${entryId}`, { method: "DELETE" });
     if (entry) {
+      await updateCourseSectionHoursAfterRemoval(entry);
+    }
+    if (entry) {
       pushUndoAction({
         type: "delete",
         entry,
@@ -1559,15 +1766,18 @@ export default function App() {
   const handleCreateNamed = async (
     path: string,
     value: string,
-    reset: () => void
+    reset: () => void,
+    label: string
   ) => {
-    if (!value.trim()) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
     await fetch(`${API_BASE}/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: value }),
+      body: JSON.stringify({ name: trimmed }),
     });
     reset();
+    setToast({ message: `${label} added`, showRevert: false });
     refreshAll();
   };
 
@@ -1780,6 +1990,26 @@ export default function App() {
     viewMode === "timetable-section"
       ? customizeSettings.sectionBgColors[effectiveSelection]
       : undefined;
+  const facultyLoadHours = useMemo(() => {
+    const loads: Record<string, number> = {};
+    entries.forEach((entry) => {
+      const key = normalizeMatchValue(entry.Faculty);
+      if (!key) return;
+      loads[key] = (loads[key] ?? 0) + getEntryWeeklyHours(entry);
+    });
+    return loads;
+  }, [entries]);
+  const formatHoursLabel = (hours: number) => {
+    const rounded = roundHours(hours);
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+  };
+  const getTimetableEntityLabel = (name: string) => {
+    if (viewMode !== "timetable-faculty" || !name) {
+      return name;
+    }
+    const hours = facultyLoadHours[normalizeMatchValue(name)] ?? 0;
+    return `${name} (${formatHoursLabel(hours)} hrs)`;
+  };
   const facultyPickerValue = normalizeHex(facultyColorInput) || colorPalette[0];
   const sectionPickerValue = normalizeHex(sectionColorInput) || colorPalette[0];
 
@@ -1856,6 +2086,11 @@ export default function App() {
 
   return (
     <div className="app">
+      {toast && !toast.showRevert && (
+        <div className="toast global" role="status" aria-live="polite">
+          <span>{toast.message}</span>
+        </div>
+      )}
       <div className="topbar">
         <div className="topbar-left" ref={menuRef}>
           <div className="menu-bar">
@@ -2682,13 +2917,13 @@ export default function App() {
                   >
                     {currentViewConfig.entities.map((entity) => (
                       <option key={entity.id} value={entity.name}>
-                        {entity.name}
+                        {getTimetableEntityLabel(entity.name)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div className="timetable-title">
-                  {effectiveSelection ||
+                  {getTimetableEntityLabel(effectiveSelection) ||
                     (currentViewConfig.label ? `No ${currentViewConfig.label} yet` : "")}
                 </div>
                 <div className="timetable-header-right">
@@ -2720,7 +2955,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {toast && (
+              {toast && toast.showRevert && (
                 <div className="toast overlay">
                   <span>{toast.message}</span>
                   {toast.showRevert && moveSnapshot && (
@@ -2837,7 +3072,7 @@ export default function App() {
                                 setDragTarget(null);
                               }}
                               onClick={() => enterEditMode(entry)}
-                              onContextMenu={(event) => handleBlockContextMenu(event, entry)}
+                              onContextMenu={(event) => handleBlockContextMenu(event, entry, day)}
                             >
                               <div className="block-content">
                                 {customizeSettings.blockDisplay.showCourseCode && (
@@ -2891,6 +3126,9 @@ export default function App() {
                   <button onClick={() => enterEditMode(blockMenu.entry)} disabled={isSaving}>
                     Edit
                   </button>
+                  <button onClick={duplicateEntryToNextDay} disabled={isSaving}>
+                    Duplicate to Next Day
+                  </button>
                   <button onClick={() => deleteEntry(blockMenu.entry)} disabled={isSaving}>
                     Delete
                   </button>
@@ -2900,7 +3138,25 @@ export default function App() {
           )}
         </div>
 
-        <aside className="panel" ref={panelRef}>
+        <aside className={`panel ${formEditId ? "editing" : ""}`} ref={panelRef}>
+          {formEditId && (
+            <div className="edit-mode-banner">
+              <div>
+                <strong>Editing selected class</strong>
+                <span>
+                  {scheduleForm["Course Code"] || "Untitled class"} /{" "}
+                  {scheduleForm.Section || "No section"}
+                </span>
+              </div>
+              <button
+                className="secondary-button compact-button"
+                onClick={cancelEditMode}
+                disabled={isSaving}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           <h3>{formEditId ? "Edit Class" : "Add Class"}</h3>
           <label>
             Program
@@ -2973,12 +3229,7 @@ export default function App() {
             <input
               type="number"
               value={scheduleForm["# of Hours"]}
-              onChange={(event) =>
-                setScheduleForm({
-                  ...scheduleForm,
-                  "# of Hours": Number(event.target.value),
-                })
-              }
+              readOnly
             />
           </label>
           <label>
@@ -3060,7 +3311,7 @@ export default function App() {
             </datalist>
           </label>
           <button onClick={handleCreateSchedule} disabled={isSaving}>
-            {formEditId ? "Update Class" : "Add Class"}
+            {formEditId ? "Save Changes to Selected Class" : "Add Class"}
           </button>
           {formEditId && (
             <button className="secondary-button" onClick={cancelEditMode} disabled={isSaving}>
@@ -3079,7 +3330,7 @@ export default function App() {
           </label>
           <button
             onClick={() =>
-              handleCreateNamed("sections", newSection, () => setNewSection(""))
+              handleCreateNamed("sections", newSection, () => setNewSection(""), "Section")
             }
           >
             Add Section
@@ -3095,7 +3346,7 @@ export default function App() {
           </label>
           <button
             onClick={() =>
-              handleCreateNamed("faculty", newFaculty, () => setNewFaculty(""))
+              handleCreateNamed("faculty", newFaculty, () => setNewFaculty(""), "Faculty")
             }
           >
             Add Faculty
@@ -3108,7 +3359,7 @@ export default function App() {
           </label>
           <button
             onClick={() =>
-              handleCreateNamed("rooms", newRoom, () => setNewRoom(""))
+              handleCreateNamed("rooms", newRoom, () => setNewRoom(""), "Room")
             }
           >
             Add Room
