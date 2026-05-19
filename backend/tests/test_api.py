@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -36,3 +38,17 @@ def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
     assert client.get("/reports/timetable/section.csv").status_code == 200
+
+
+def test_update_and_delete_section():
+    suffix = uuid4().hex[:8]
+    create_response = client.post("/sections", json={"name": f"TEMP-A-{suffix}"})
+    assert create_response.status_code == 200
+    section_id = create_response.json()["id"]
+
+    update_response = client.put(f"/sections/{section_id}", json={"name": f"TEMP-B-{suffix}"})
+    assert update_response.status_code == 200
+    assert update_response.json()["name"] == f"TEMP-B-{suffix}"
+
+    delete_response = client.delete(f"/sections/{section_id}")
+    assert delete_response.status_code == 200

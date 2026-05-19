@@ -127,6 +127,18 @@ body {
   width: 64px;
 }
 
+.menu-select {
+  justify-content: space-between;
+}
+
+.menu-select select {
+  max-width: 130px;
+  padding: 3px 4px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
 .menu-divider {
   height: 1px;
   background: #d7dee9;
@@ -274,6 +286,29 @@ body {
   border-radius: 4px;
 }
 
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.modal-field select {
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.modal-note,
+.form-note {
+  color: #526176;
+  background: #f4f7fb;
+  border: 1px solid #dce4ef;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+}
+
 .course-description-list {
   display: flex;
   flex-direction: column;
@@ -299,6 +334,42 @@ body {
   padding: 6px 8px;
   border: 1px solid #ccd3df;
   border-radius: 4px;
+}
+
+.section-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.section-editor-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(130px, 0.8fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.section-editor-row input,
+.section-editor-row select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.section-editor-row button {
+  padding: 6px 10px;
+  border: 1px solid #bfc9d9;
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.section-editor-row .danger-button {
+  border-color: #d8a0a0;
+  color: #9a2f2f;
 }
 
 .color-input {

@@ -103,6 +103,31 @@ def create_named_entity(db: Session, model_cls, name: str):
     return instance
 
 
+def update_named_entity(db: Session, model_cls, entity_id: int, name: str):
+    instance = db.get(model_cls, entity_id)
+    if instance is None:
+        raise ValueError("Entity not found")
+    old_name = instance.name
+    instance.name = name
+    if model_cls is models.Section:
+        entries = db.scalars(
+            select(models.ScheduleEntry).where(models.ScheduleEntry.section == old_name)
+        )
+        for entry in entries:
+            entry.section = name
+    db.commit()
+    db.refresh(instance)
+    return instance
+
+
+def delete_named_entity(db: Session, model_cls, entity_id: int) -> None:
+    instance = db.get(model_cls, entity_id)
+    if instance is None:
+        raise ValueError("Entity not found")
+    db.delete(instance)
+    db.commit()
+
+
 def list_named_entities(db: Session, model_cls):
     return list(db.scalars(select(model_cls).order_by(model_cls.name)))
 
