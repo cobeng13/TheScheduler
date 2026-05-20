@@ -124,6 +124,14 @@ def delete_named_entity(db: Session, model_cls, entity_id: int) -> None:
     instance = db.get(model_cls, entity_id)
     if instance is None:
         raise ValueError("Entity not found")
+    if model_cls is models.Section:
+        has_entries = db.scalar(
+            select(models.ScheduleEntry.id)
+            .where(models.ScheduleEntry.section == instance.name)
+            .limit(1)
+        )
+        if has_entries is not None:
+            raise ValueError("Section has scheduled classes")
     db.delete(instance)
     db.commit()
 

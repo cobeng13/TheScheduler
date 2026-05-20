@@ -207,7 +207,8 @@ def delete_section(section_id: int, db: Session = Depends(get_db)):
     try:
         crud.delete_named_entity(db, models.Section, section_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        status_code = 409 if str(exc) == "Section has scheduled classes" else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return {"ok": True}
 
 
