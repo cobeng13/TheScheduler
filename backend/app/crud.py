@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import models, time_utils
 from .schemas import ScheduleEntryCreate, ScheduleEntryUpdate
+
+
+PLACEHOLDER_ENTITY_NAMES = {
+    models.Section: {"no section", "no sections", "no section yet", "no sections yet"},
+    models.Faculty: {"no faculty", "no faculty yet"},
+    models.Room: {"no room", "no rooms", "no room yet", "no rooms yet"},
+}
 
 
 def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.ScheduleEntry:
@@ -138,6 +145,45 @@ def delete_named_entity(db: Session, model_cls, entity_id: int) -> None:
 
 def list_named_entities(db: Session, model_cls):
     return list(db.scalars(select(model_cls).order_by(model_cls.name)))
+
+
+def remove_unused_placeholder_entities(db: Session) -> None:
+    real_sections = {
+        name.lower()
+        for name in db.scalars(select(models.ScheduleEntry.section).distinct())
+        if name and name.strip()
+    }
+    real_faculty = {
+        name.lower()
+        for name in db.scalars(select(models.ScheduleEntry.faculty).distinct())
+        if name and name.strip()
+    }
+    real_rooms = {
+        name.lower()
+        for name in db.scalars(select(models.ScheduleEntry.room).distinct())
+        if name and name.strip()
+    }
+    usage = {
+        models.Section: real_sections,
+        models.Faculty: real_faculty,
+        models.Room: real_rooms,
+    }
+    changed = False
+    for model_cls, placeholder_names in PLACEHOLDER_ENTITY_NAMES.items():
+        has_real_entities = any(name not in placeholder_names for name in usage[model_cls])
+        if not has_real_entities:
+            continue
+        placeholders = list(
+            db.scalars(
+                select(model_cls).where(func.lower(model_cls.name).in_(placeholder_names))
+            )
+        )
+        for placeholder in placeholders:
+            if placeholder.name.strip().lower() not in usage[model_cls]:
+                db.delete(placeholder)
+                changed = True
+    if changed:
+        db.commit()
 
 
 def get_app_settings(db: Session) -> models.AppSettings | None:

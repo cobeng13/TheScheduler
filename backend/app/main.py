@@ -330,6 +330,9 @@ def import_database(file: UploadFile = File(...)):
     with temp_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     shutil.move(str(temp_path), target)
+    with SessionLocal() as db:
+        models.Base.metadata.create_all(bind=engine)
+        crud.remove_unused_placeholder_entities(db)
     return {"ok": True}
 
 
@@ -476,6 +479,7 @@ def import_csv(
 
     if not preview:
         db.commit()
+        crud.remove_unused_placeholder_entities(db)
 
     return {
         "rows_total": rows_total,

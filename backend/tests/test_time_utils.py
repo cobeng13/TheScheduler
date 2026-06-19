@@ -34,3 +34,8 @@ def test_parse_time_lpu_rejects_invalid_range():
         assert "Invalid Time (LPU Std)" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_normalize_days_accepts_slash_separated_days():
+    assert time_utils.normalize_days_string("M/T/W") == "M,T,W"
+    assert time_utils.normalize_days("M/T/W") == {"M", "T", "W"}

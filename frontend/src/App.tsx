@@ -113,6 +113,16 @@ type CustomizeSettings = {
   sectionBgColors: Record<string, string>;
 };
 
+type ConflictIgnoreSettings = {
+  ignoreFaculty: boolean;
+  ignoreRoom: boolean;
+  ignoreTba: boolean;
+  ignoreFacultyList: string[];
+  ignoreRoomList: string[];
+  containsFaculty: boolean;
+  containsRoom: boolean;
+};
+
 const API_BASE = "http://localhost:8000";
 const CUSTOMIZE_STORAGE_KEY = "scheduler.customize";
 const CURRICULUM_STORAGE_KEY = "scheduler.curriculum";
@@ -121,6 +131,15 @@ const CURRICULUM_TERM_STORAGE_KEY = "scheduler.curriculum.term";
 const CURRICULUM_STORAGE_VERSION_KEY = "scheduler.curriculum.version";
 const CURRICULUM_STORAGE_VERSION = "3";
 const SECTION_YEAR_LEVELS_STORAGE_KEY = "scheduler.sectionYearLevels";
+const LEGACY_RULE_STORAGE_KEYS = [
+  "rulesIgnoreFaculty",
+  "rulesIgnoreRoom",
+  "rulesIgnoreTba",
+  "rulesIgnoreFacultyList",
+  "rulesIgnoreRoomList",
+  "rulesContainsFaculty",
+  "rulesContainsRoom",
+];
 
 const defaultCurriculumState: CurriculumState = {
   curricula: [],
@@ -139,6 +158,16 @@ const defaultCustomizeSettings: CustomizeSettings = {
   classBlockFontSizePx: 12,
   facultyColors: {},
   sectionBgColors: {},
+};
+
+const defaultConflictIgnoreSettings: ConflictIgnoreSettings = {
+  ignoreFaculty: false,
+  ignoreRoom: false,
+  ignoreTba: false,
+  ignoreFacultyList: [],
+  ignoreRoomList: [],
+  containsFaculty: false,
+  containsRoom: false,
 };
 
 const normalizeCustomizeSettings = (settings: Partial<CustomizeSettings> | null) => ({
@@ -162,6 +191,23 @@ const isCustomizeSettingsShape = (settings: unknown): settings is Partial<Custom
     "sectionBgColors" in value
   );
 };
+
+const normalizeStringList = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+
+const normalizeConflictIgnoreSettings = (
+  settings: Partial<ConflictIgnoreSettings> | null
+): ConflictIgnoreSettings => ({
+  ignoreFaculty: settings?.ignoreFaculty ?? defaultConflictIgnoreSettings.ignoreFaculty,
+  ignoreRoom: settings?.ignoreRoom ?? defaultConflictIgnoreSettings.ignoreRoom,
+  ignoreTba: settings?.ignoreTba ?? defaultConflictIgnoreSettings.ignoreTba,
+  ignoreFacultyList: normalizeStringList(settings?.ignoreFacultyList),
+  ignoreRoomList: normalizeStringList(settings?.ignoreRoomList),
+  containsFaculty: settings?.containsFaculty ?? defaultConflictIgnoreSettings.containsFaculty,
+  containsRoom: settings?.containsRoom ?? defaultConflictIgnoreSettings.containsRoom,
+});
 
 const normalizeCurriculumState = (
   state: Partial<CurriculumState> | null
@@ -692,6 +738,7 @@ export default function App() {
     entry: ScheduleEntry;
     day: string;
   } | null>(null);
+  const [copiedBlock, setCopiedBlock] = useState<ScheduleEntry | null>(null);
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<typeof canonicalHeaders[number]>(
     "Course Code"
@@ -818,17 +865,41 @@ export default function App() {
     [curricula, curriculumTerm, sectionYearLevels, yearLevelCurriculumIds]
   );
 
+  const conflictIgnoreSettings = useMemo(
+    () => ({
+      ignoreFaculty,
+      ignoreRoom,
+      ignoreTba,
+      ignoreFacultyList,
+      ignoreRoomList,
+      containsFaculty,
+      containsRoom,
+    }),
+    [
+      ignoreFaculty,
+      ignoreRoom,
+      ignoreTba,
+      ignoreFacultyList,
+      ignoreRoomList,
+      containsFaculty,
+      containsRoom,
+    ]
+  );
+
+  const applyConflictIgnoreSettings = (settings: ConflictIgnoreSettings) => {
+    setIgnoreFaculty(settings.ignoreFaculty);
+    setIgnoreRoom(settings.ignoreRoom);
+    setIgnoreTba(settings.ignoreTba);
+    setIgnoreFacultyList(settings.ignoreFacultyList);
+    setIgnoreRoomList(settings.ignoreRoomList);
+    setContainsFaculty(settings.containsFaculty);
+    setContainsRoom(settings.containsRoom);
+  };
+
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
     const storedSection = localStorage.getItem("lastSection");
     const storedZoom = localStorage.getItem("timetableZoom");
-    const storedIgnoreFaculty = localStorage.getItem("rulesIgnoreFaculty");
-    const storedIgnoreRoom = localStorage.getItem("rulesIgnoreRoom");
-    const storedIgnoreTba = localStorage.getItem("rulesIgnoreTba");
-    const storedIgnoreFacultyList = localStorage.getItem("rulesIgnoreFacultyList");
-    const storedIgnoreRoomList = localStorage.getItem("rulesIgnoreRoomList");
-    const storedContainsFaculty = localStorage.getItem("rulesContainsFaculty");
-    const storedContainsRoom = localStorage.getItem("rulesContainsRoom");
     setScheduleForm((prev) => ({
       ...prev,
       Program: storedProgram ?? prev.Program,
@@ -840,27 +911,7 @@ export default function App() {
         setZoomPercent(parsed);
       }
     }
-    if (storedIgnoreFaculty) {
-      setIgnoreFaculty(storedIgnoreFaculty === "true");
-    }
-    if (storedIgnoreRoom) {
-      setIgnoreRoom(storedIgnoreRoom === "true");
-    }
-    if (storedIgnoreTba) {
-      setIgnoreTba(storedIgnoreTba === "true");
-    }
-    if (storedIgnoreFacultyList) {
-      setIgnoreFacultyList(storedIgnoreFacultyList.split("|").filter(Boolean));
-    }
-    if (storedIgnoreRoomList) {
-      setIgnoreRoomList(storedIgnoreRoomList.split("|").filter(Boolean));
-    }
-    if (storedContainsFaculty) {
-      setContainsFaculty(storedContainsFaculty === "true");
-    }
-    if (storedContainsRoom) {
-      setContainsRoom(storedContainsRoom === "true");
-    }
+    LEGACY_RULE_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     const storedCustomize = localStorage.getItem(CUSTOMIZE_STORAGE_KEY);
     if (storedCustomize) {
       try {
@@ -872,19 +923,19 @@ export default function App() {
     }
   }, []);
 
-  const fetchConflicts = async () => {
+  const fetchConflicts = async (settings: ConflictIgnoreSettings = conflictIgnoreSettings) => {
     const params = new URLSearchParams();
-    params.set("ignore_faculty", String(ignoreFaculty));
-    params.set("ignore_room", String(ignoreRoom));
-    params.set("ignore_tba", String(ignoreTba));
-    if (ignoreFacultyList.length > 0) {
-      params.set("ignore_faculty_list", ignoreFacultyList.join(","));
+    params.set("ignore_faculty", String(settings.ignoreFaculty));
+    params.set("ignore_room", String(settings.ignoreRoom));
+    params.set("ignore_tba", String(settings.ignoreTba));
+    if (settings.ignoreFacultyList.length > 0) {
+      params.set("ignore_faculty_list", settings.ignoreFacultyList.join(","));
     }
-    if (ignoreRoomList.length > 0) {
-      params.set("ignore_room_list", ignoreRoomList.join(","));
+    if (settings.ignoreRoomList.length > 0) {
+      params.set("ignore_room_list", settings.ignoreRoomList.join(","));
     }
-    params.set("contains_faculty", String(containsFaculty));
-    params.set("contains_room", String(containsRoom));
+    params.set("contains_faculty", String(settings.containsFaculty));
+    params.set("contains_room", String(settings.containsRoom));
     const conflictsRes = await fetch(`${API_BASE}/conflicts?${params.toString()}`);
     setConflicts(await conflictsRes.json());
   };
@@ -950,7 +1001,8 @@ export default function App() {
 
   const persistSettings = async (
     settings: CustomizeSettings,
-    nextCurriculumState: CurriculumState
+    nextCurriculumState: CurriculumState,
+    nextConflictIgnoreSettings: ConflictIgnoreSettings = conflictIgnoreSettings
   ) => {
     await fetch(`${API_BASE}/settings`, {
       method: "PUT",
@@ -959,20 +1011,25 @@ export default function App() {
         settings: {
           customize: settings,
           curriculumState: nextCurriculumState,
+          conflictIgnore: nextConflictIgnoreSettings,
         },
       }),
     });
   };
 
-  const loadSettingsFromServer = async () => {
+  const loadSettingsFromServer = async (): Promise<ConflictIgnoreSettings> => {
     const res = await fetch(`${API_BASE}/settings`);
     if (!res.ok) {
       applyCurriculumState(buildLegacyCurriculumState());
+      applyConflictIgnoreSettings(defaultConflictIgnoreSettings);
       setSettingsLoaded(true);
-      return;
+      return defaultConflictIgnoreSettings;
     }
     const data = await res.json();
     const settings = data?.settings ?? {};
+    const loadedConflictIgnoreSettings = settings.conflictIgnore
+      ? normalizeConflictIgnoreSettings(settings.conflictIgnore)
+      : defaultConflictIgnoreSettings;
     const hasSettings = settings && Object.keys(settings).length > 0;
     if (hasSettings) {
       if (settings.customize) {
@@ -993,18 +1050,21 @@ export default function App() {
             : isCustomizeSettingsShape(settings)
               ? normalizeCustomizeSettings(settings)
               : customizeSettings,
-          legacyCurriculumState
+          legacyCurriculumState,
+          loadedConflictIgnoreSettings
         );
       }
     }
+    applyConflictIgnoreSettings(loadedConflictIgnoreSettings);
     setSettingsLoaded(true);
+    return loadedConflictIgnoreSettings;
   };
 
   const pushUndoAction = (action: UndoAction) => {
     setUndoStack((prev) => [action, ...prev].slice(0, 20));
   };
 
-  const refreshAll = async () => {
+  const refreshAll = async (conflictSettings: ConflictIgnoreSettings = conflictIgnoreSettings) => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes] = await Promise.all([
       fetch(`${API_BASE}/schedule`),
       fetch(`${API_BASE}/sections`),
@@ -1015,25 +1075,22 @@ export default function App() {
     setSections(await sectionsRes.json());
     setFaculty(await facultyRes.json());
     setRooms(await roomsRes.json());
-    await fetchConflicts();
+    await fetchConflicts(conflictSettings);
     if (currentViewConfig.selected && viewMode.startsWith("timetable")) {
       await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
     }
   };
 
   useEffect(() => {
-    refreshAll();
-    loadSettingsFromServer();
+    const initialize = async () => {
+      const loadedConflictIgnoreSettings = await loadSettingsFromServer();
+      await refreshAll(loadedConflictIgnoreSettings);
+    };
+    initialize();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("rulesIgnoreFaculty", String(ignoreFaculty));
-    localStorage.setItem("rulesIgnoreRoom", String(ignoreRoom));
-    localStorage.setItem("rulesIgnoreTba", String(ignoreTba));
-    localStorage.setItem("rulesIgnoreFacultyList", ignoreFacultyList.join("|"));
-    localStorage.setItem("rulesIgnoreRoomList", ignoreRoomList.join("|"));
-    localStorage.setItem("rulesContainsFaculty", String(containsFaculty));
-    localStorage.setItem("rulesContainsRoom", String(containsRoom));
+    if (!settingsLoaded) return;
     fetchConflicts();
   }, [
     ignoreFaculty,
@@ -1043,6 +1100,7 @@ export default function App() {
     ignoreRoomList,
     containsFaculty,
     containsRoom,
+    settingsLoaded,
   ]);
 
   useEffect(() => {
@@ -1059,7 +1117,7 @@ export default function App() {
         window.clearTimeout(settingsSaveTimeout.current);
       }
     };
-  }, [customizeSettings, curriculumState, settingsLoaded]);
+  }, [customizeSettings, curriculumState, conflictIgnoreSettings, settingsLoaded]);
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -1856,7 +1914,10 @@ export default function App() {
       .join(", ");
   };
 
-  const buildConflictMessage = (conflictsList: MoveConflictDetail[]) => {
+  const buildConflictMessage = (
+    conflictsList: MoveConflictDetail[],
+    lead = "Move blocked"
+  ) => {
     const details = conflictsList.map((conflict) => {
       const entry = conflict.entry;
       const typeLabel = conflict.conflict_type === "room" ? "ROOM" : "FACULTY";
@@ -1868,7 +1929,7 @@ export default function App() {
       const daysLabel = formatDaysForDisplay(entry.Days);
       return `${typeLabel} ${owner} — ${entry.Section} / ${entry["Course Code"]} — ${daysLabel} ${timeLabel} (Room ${entry.Room}, Faculty ${entry.Faculty})`;
     });
-    return `Move blocked: conflicts with ${details.join(" | ")}.`;
+    return `${lead}: conflicts with ${details.join(" | ")}.`;
   };
 
   const checkMoveConflicts = async (entry: ScheduleEntry, payload: ScheduleEntry) => {
@@ -2115,9 +2176,74 @@ export default function App() {
     setBlockMenu({ x: event.clientX, y: event.clientY, entry, day });
   };
 
-  const duplicateEntryToNextDay = async () => {
-    if (!blockMenu || isSaving) return;
-    const { entry, day } = blockMenu;
+  const copyBlock = () => {
+    if (!blockMenu) return;
+    setCopiedBlock(blockMenu.entry);
+    setToast({
+      message: `Copied ${blockMenu.entry["Course Code"]} from ${blockMenu.entry.Section}`,
+      showRevert: false,
+    });
+    setBlockMenu(null);
+  };
+
+  const pasteCopiedBlockToCurrentSection = async () => {
+    if (!copiedBlock || isSaving) return;
+    if (viewMode !== "timetable-section" || !currentViewConfig.selected) {
+      setToast({ message: "Paste is available in section timetable view.", showRevert: false });
+      setContextMenu(null);
+      return;
+    }
+    const targetSection = currentViewConfig.selected;
+    let payload = withCalculatedHours(
+      withCanonicalCourseDescription({
+        ...copiedBlock,
+        id: 0,
+        Section: targetSection,
+      }),
+      null
+    );
+    const pasteCheck = await checkMoveConflicts(payload, payload);
+    if (!pasteCheck.ok && pasteCheck.reason === "conflict" && pasteCheck.conflicts?.length) {
+      payload = withCalculatedHours(
+        withCanonicalCourseDescription({
+          ...payload,
+          Room: "TBA",
+          Faculty: "TBA",
+        }),
+        null
+      );
+    }
+    setIsSaving(true);
+    const createResponse = await fetch(`${API_BASE}/schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const created = await createResponse.json();
+    if (created?.id) {
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
+      await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
+      pushUndoAction({
+        type: "add",
+        entryId: created.id,
+        label: `Paste Class: ${payload["Course Code"]}`,
+      });
+      setToast({
+        message:
+          !pasteCheck.ok && pasteCheck.reason === "conflict"
+            ? `Pasted ${payload["Course Code"]} to ${targetSection} with TBA room/faculty`
+            : `Pasted ${payload["Course Code"]} to ${targetSection}`,
+        showRevert: false,
+      });
+    }
+    setContextMenu(null);
+    setBlockMenu(null);
+    await refreshAll();
+    setIsSaving(false);
+  };
+
+  const duplicateEntryToNextDay = async (entry: ScheduleEntry, day: string) => {
+    if (isSaving) return;
     const nextDay = getNextDay(day);
     if (!nextDay) return;
     const payload = withCalculatedHours(
@@ -2645,8 +2771,8 @@ export default function App() {
     form.append("file", file);
     await fetch(`${API_BASE}/file/import`, { method: "POST", body: form });
     setUndoStack([]);
-    await refreshAll();
-    loadSettingsFromServer();
+    const loadedConflictIgnoreSettings = await loadSettingsFromServer();
+    await refreshAll(loadedConflictIgnoreSettings);
   };
 
   const handleImportCsvPreview = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -4386,6 +4512,11 @@ export default function App() {
                   style={{ top: contextMenu.y, left: contextMenu.x }}
                 >
                   <button onClick={applySelectionToForm}>Add Class</button>
+                  {viewMode === "timetable-section" && copiedBlock ? (
+                    <button onClick={pasteCopiedBlockToCurrentSection} disabled={isSaving}>
+                      Paste Copied Class
+                    </button>
+                  ) : null}
                 </div>
               )}
               {blockMenu && (
@@ -4396,7 +4527,13 @@ export default function App() {
                   <button onClick={() => enterEditMode(blockMenu.entry)} disabled={isSaving}>
                     Edit
                   </button>
-                  <button onClick={duplicateEntryToNextDay} disabled={isSaving}>
+                  <button onClick={copyBlock} disabled={isSaving}>
+                    Copy
+                  </button>
+                  <button
+                    onClick={() => duplicateEntryToNextDay(blockMenu.entry, blockMenu.day)}
+                    disabled={isSaving}
+                  >
                     Duplicate to Next Day
                   </button>
                   <button onClick={() => deleteEntry(blockMenu.entry)} disabled={isSaving}>
