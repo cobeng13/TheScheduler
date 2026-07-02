@@ -127,6 +127,18 @@ body {
   width: 64px;
 }
 
+.menu-select {
+  justify-content: space-between;
+}
+
+.menu-select select {
+  max-width: 130px;
+  padding: 3px 4px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}
+
 .menu-divider {
   height: 1px;
   background: #d7dee9;
@@ -274,6 +286,116 @@ body {
   border-radius: 4px;
 }
 
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.modal-field input,
+.modal-field select {
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.modal-note,
+.form-note {
+  color: #526176;
+  background: #f4f7fb;
+  border: 1px solid #dce4ef;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+}
+
+.panel input.course-code-complete {
+  color: #146c43;
+  border-color: #8fc6a6;
+  background: #f2fbf5;
+  -webkit-text-fill-color: #146c43;
+}
+
+.course-plot-status {
+  margin-top: 4px;
+  color: #526176;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.course-plot-status.complete {
+  color: #146c43;
+}
+
+.course-code-field {
+  position: relative;
+}
+
+.course-code-menu-left {
+  position: fixed;
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 24px));
+  overflow: auto;
+  border: 1px solid #c8d3e1;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(38, 52, 73, 0.14);
+}
+
+.course-code-menu-left button {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  background: #ffffff;
+  color: #1c1c1c;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.course-code-menu-left button:last-child {
+  border-bottom: 0;
+}
+
+.course-code-menu-left button:hover {
+  background: #f4f7fb;
+}
+
+.course-code-menu-left button.complete {
+  background: #e9f7ee;
+  color: #183326;
+}
+
+.course-code-menu-left button.complete:hover {
+  background: #ddf1e5;
+}
+
+.course-code-menu-left button span:first-child {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.course-code-menu-left button span:last-child {
+  color: inherit;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.course-code-menu-left button.complete span:last-child {
+  color: #275b3a;
+}
+
 .course-description-list {
   display: flex;
   flex-direction: column;
@@ -299,6 +421,85 @@ body {
   padding: 6px 8px;
   border: 1px solid #ccd3df;
   border-radius: 4px;
+}
+
+.section-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.section-editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #dce4ef;
+  border-radius: 4px;
+  background: #f8fafc;
+}
+
+.section-editor-panel h4 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.curriculum-editor-list,
+.year-curriculum-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.curriculum-editor-row,
+.year-curriculum-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, auto);
+  gap: 8px;
+  align-items: center;
+}
+
+.year-curriculum-row {
+  font-weight: 600;
+}
+
+.year-curriculum-row select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.section-editor-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(130px, 0.8fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.section-editor-row input,
+.section-editor-row select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #ccd3df;
+  border-radius: 4px;
+}
+
+.curriculum-editor-row button,
+.section-editor-row button {
+  padding: 6px 10px;
+  border: 1px solid #bfc9d9;
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.curriculum-editor-row .danger-button,
+.section-editor-row .danger-button {
+  border-color: #d8a0a0;
+  color: #9a2f2f;
 }
 
 .color-input {
@@ -857,6 +1058,29 @@ body {
 
 .panel button:hover {
   background: #244b83;
+}
+
+.panel .course-code-menu-left button {
+  margin-bottom: 0;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  background: #ffffff;
+  color: #1c1c1c;
+  border-radius: 0;
+  padding: 11px 14px;
+}
+
+.panel .course-code-menu-left button:hover {
+  background: #f4f7fb;
+}
+
+.panel .course-code-menu-left button.complete {
+  background: #e9f7ee;
+  color: #183326;
+}
+
+.panel .course-code-menu-left button.complete:hover {
+  background: #ddf1e5;
 }
 
 

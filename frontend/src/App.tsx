@@ -45,6 +45,35 @@ type CsvImportSummary = {
   errors: Array<{ row_index: number; reason: string }>;
 };
 
+type CurriculumTerm = "First Semester" | "Second Semester" | "Term Break";
+
+type CurriculumCourse = {
+  program: string;
+  yearLevel: string;
+  semester: CurriculumTerm;
+  courseCode: string;
+  courseDescription: string;
+  lecUnits: number;
+  labUnits: number;
+  totalUnits: number;
+  hours: number;
+};
+
+type Curriculum = {
+  id: string;
+  name: string;
+  sourceFileName: string;
+  importedAt: string;
+  courses: CurriculumCourse[];
+};
+
+type CurriculumState = {
+  curricula: Curriculum[];
+  selectedTerm: CurriculumTerm;
+  sectionYearLevels: Record<string, string>;
+  yearLevelCurriculumIds: Record<string, string>;
+};
+
 type CourseDescriptionConflict = {
   codeKey: string;
   code: string;
@@ -84,8 +113,40 @@ type CustomizeSettings = {
   sectionBgColors: Record<string, string>;
 };
 
+type ConflictIgnoreSettings = {
+  ignoreFaculty: boolean;
+  ignoreRoom: boolean;
+  ignoreTba: boolean;
+  ignoreFacultyList: string[];
+  ignoreRoomList: string[];
+  containsFaculty: boolean;
+  containsRoom: boolean;
+};
+
 const API_BASE = "http://localhost:8000";
 const CUSTOMIZE_STORAGE_KEY = "scheduler.customize";
+const CURRICULUM_STORAGE_KEY = "scheduler.curriculum";
+const CURRICULUM_STATE_STORAGE_KEY = "scheduler.curriculum.state";
+const CURRICULUM_TERM_STORAGE_KEY = "scheduler.curriculum.term";
+const CURRICULUM_STORAGE_VERSION_KEY = "scheduler.curriculum.version";
+const CURRICULUM_STORAGE_VERSION = "3";
+const SECTION_YEAR_LEVELS_STORAGE_KEY = "scheduler.sectionYearLevels";
+const LEGACY_RULE_STORAGE_KEYS = [
+  "rulesIgnoreFaculty",
+  "rulesIgnoreRoom",
+  "rulesIgnoreTba",
+  "rulesIgnoreFacultyList",
+  "rulesIgnoreRoomList",
+  "rulesContainsFaculty",
+  "rulesContainsRoom",
+];
+
+const defaultCurriculumState: CurriculumState = {
+  curricula: [],
+  selectedTerm: "First Semester",
+  sectionYearLevels: {},
+  yearLevelCurriculumIds: {},
+};
 
 const defaultCustomizeSettings: CustomizeSettings = {
   blockDisplay: {
@@ -99,6 +160,16 @@ const defaultCustomizeSettings: CustomizeSettings = {
   sectionBgColors: {},
 };
 
+const defaultConflictIgnoreSettings: ConflictIgnoreSettings = {
+  ignoreFaculty: false,
+  ignoreRoom: false,
+  ignoreTba: false,
+  ignoreFacultyList: [],
+  ignoreRoomList: [],
+  containsFaculty: false,
+  containsRoom: false,
+};
+
 const normalizeCustomizeSettings = (settings: Partial<CustomizeSettings> | null) => ({
   ...defaultCustomizeSettings,
   ...settings,
@@ -109,6 +180,55 @@ const normalizeCustomizeSettings = (settings: Partial<CustomizeSettings> | null)
     ...settings?.blockDisplay,
   },
 });
+
+const isCustomizeSettingsShape = (settings: unknown): settings is Partial<CustomizeSettings> => {
+  if (!settings || typeof settings !== "object") return false;
+  const value = settings as Record<string, unknown>;
+  return (
+    "blockDisplay" in value ||
+    "classBlockFontSizePx" in value ||
+    "facultyColors" in value ||
+    "sectionBgColors" in value
+  );
+};
+
+const normalizeStringList = (value: unknown) =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+
+const normalizeConflictIgnoreSettings = (
+  settings: Partial<ConflictIgnoreSettings> | null
+): ConflictIgnoreSettings => ({
+  ignoreFaculty: settings?.ignoreFaculty ?? defaultConflictIgnoreSettings.ignoreFaculty,
+  ignoreRoom: settings?.ignoreRoom ?? defaultConflictIgnoreSettings.ignoreRoom,
+  ignoreTba: settings?.ignoreTba ?? defaultConflictIgnoreSettings.ignoreTba,
+  ignoreFacultyList: normalizeStringList(settings?.ignoreFacultyList),
+  ignoreRoomList: normalizeStringList(settings?.ignoreRoomList),
+  containsFaculty: settings?.containsFaculty ?? defaultConflictIgnoreSettings.containsFaculty,
+  containsRoom: settings?.containsRoom ?? defaultConflictIgnoreSettings.containsRoom,
+});
+
+const normalizeCurriculumState = (
+  state: Partial<CurriculumState> | null
+): CurriculumState => ({
+  curricula: Array.isArray(state?.curricula) ? state.curricula : [],
+  selectedTerm: normalizeSemester(state?.selectedTerm ?? "") ?? defaultCurriculumState.selectedTerm,
+  sectionYearLevels:
+    state?.sectionYearLevels && typeof state.sectionYearLevels === "object"
+      ? state.sectionYearLevels
+      : {},
+  yearLevelCurriculumIds:
+    state?.yearLevelCurriculumIds && typeof state.yearLevelCurriculumIds === "object"
+      ? state.yearLevelCurriculumIds
+      : {},
+});
+
+const buildCurriculumId = () =>
+  `curriculum-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const getFileBaseName = (fileName: string) =>
+  fileName.replace(/\.[^/.]+$/, "").trim() || "Curriculum";
 
 const buildEmptyScheduleForm = (defaults?: Partial<ScheduleEntry>): ScheduleEntry => ({
   id: 0,
@@ -227,6 +347,202 @@ const parseLpuRange = (range: string) => {
 const normalizeMatchValue = (value: string) => value.trim().toLowerCase();
 
 const roundHours = (value: number) => Number(value.toFixed(2));
+
+const getYearLevelSortRank = (yearLevel: string) => {
+  const normalized = normalizeMatchValue(yearLevel);
+  const numericPrefix = normalized.match(/^(\d+)/);
+  if (numericPrefix) {
+    return Number(numericPrefix[1]);
+  }
+  if (normalized.includes("first")) return 1;
+  if (normalized.includes("second")) return 2;
+  if (normalized.includes("third")) return 3;
+  if (normalized.includes("fourth")) return 4;
+  if (normalized.includes("fifth")) return 5;
+  return Number.MAX_SAFE_INTEGER;
+};
+
+const compareYearLevels = (left: string, right: string) => {
+  const leftRank = getYearLevelSortRank(left);
+  const rightRank = getYearLevelSortRank(right);
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  return left.localeCompare(right, undefined, { sensitivity: "base", numeric: true });
+};
+
+const curriculumTerms: CurriculumTerm[] = ["First Semester", "Second Semester", "Term Break"];
+
+const normalizeSemester = (value: string): CurriculumTerm | null => {
+  const cleaned = normalizeMatchValue(value);
+  if (["1st", "1st sem", "first sem", "first semester"].includes(cleaned)) {
+    return "First Semester";
+  }
+  if (["2nd", "2nd sem", "second sem", "second semester"].includes(cleaned)) {
+    return "Second Semester";
+  }
+  if (["term break", "term-break", "summer", "midyear"].includes(cleaned)) {
+    return "Term Break";
+  }
+  return curriculumTerms.find((term) => normalizeMatchValue(term) === cleaned) ?? null;
+};
+
+const calculateCurriculumHours = (
+  semester: CurriculumTerm,
+  lecUnits: number,
+  labUnits: number
+) => {
+  if (semester === "Term Break") {
+    return roundHours(lecUnits * 4.25);
+  }
+  return roundHours(lecUnits + labUnits * 3);
+};
+
+const parseCsvText = (text: string) => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      if (row.some((value) => value.trim())) {
+        rows.push(row);
+      }
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) {
+    rows.push(row);
+  }
+  return rows;
+};
+
+const parseCurriculumCsv = (text: string) => {
+  const rows = parseCsvText(text);
+  const headers = rows[0]?.map((header) => header.trim().toLowerCase()) ?? [];
+  const headerIndex = (name: string) => headers.indexOf(name.toLowerCase());
+  const indexes = {
+    program: headerIndex("Program"),
+    yearLevel: headerIndex("Year Level"),
+    semester: headerIndex("Semester"),
+    courseCode: headerIndex("Course Code"),
+    courseDescription: headerIndex("Course Description"),
+    lecLab: headerIndex("Lec/Lab"),
+    units: headerIndex("Units"),
+  };
+  const missingColumns = Object.entries(indexes)
+    .filter(([, index]) => index === -1)
+    .map(([name]) => name);
+  if (missingColumns.length > 0) {
+    throw new Error(`Missing curriculum columns: ${missingColumns.join(", ")}`);
+  }
+
+  type CurriculumCourseParts = {
+    program: string;
+    yearLevel: string;
+    semester: CurriculumTerm;
+    courseCode: string;
+    courseDescription: string;
+    lecUnits: number;
+    labUnits: number;
+  };
+
+  const coursesByKey = new Map<string, CurriculumCourseParts>();
+  rows.slice(1).forEach((row) => {
+    const semester = normalizeSemester(row[indexes.semester] ?? "");
+    const courseCode = (row[indexes.courseCode] ?? "").trim();
+    const courseDescription = (row[indexes.courseDescription] ?? "").trim();
+    if (!semester || !courseCode || !courseDescription) return;
+    const lecLab = normalizeMatchValue(row[indexes.lecLab] ?? "");
+    const units = Number((row[indexes.units] ?? "").trim());
+    const unitValue = Number.isFinite(units) ? units : 0;
+    const program = (row[indexes.program] ?? "").trim();
+    const yearLevel = (row[indexes.yearLevel] ?? "").trim();
+    const key = [
+      normalizeMatchValue(program),
+      normalizeMatchValue(yearLevel),
+      normalizeMatchValue(semester),
+      normalizeMatchValue(courseCode),
+      normalizeMatchValue(courseDescription),
+    ].join("|");
+    const existing =
+      coursesByKey.get(key) ??
+      {
+        program,
+        yearLevel,
+        semester,
+        courseCode,
+        courseDescription,
+        lecUnits: 0,
+        labUnits: 0,
+      };
+    if (lecLab.includes("lab")) {
+      existing.labUnits += unitValue;
+    } else {
+      existing.lecUnits += unitValue;
+    }
+    coursesByKey.set(key, existing);
+  });
+
+  const courses = [...coursesByKey.values()].flatMap((course) => {
+    const hasLec = course.lecUnits > 0;
+    const hasLab = course.labUnits > 0;
+    const hasBoth = hasLec && hasLab;
+    const entries: CurriculumCourse[] = [];
+
+    if (hasLec) {
+      entries.push({
+        ...course,
+        courseCode: hasBoth ? `${course.courseCode} LEC` : course.courseCode,
+        courseDescription: hasBoth
+          ? `${course.courseDescription} LEC`
+          : course.courseDescription,
+        lecUnits: course.lecUnits,
+        labUnits: 0,
+        totalUnits: roundHours(course.lecUnits),
+        hours: calculateCurriculumHours(course.semester, course.lecUnits, 0),
+      });
+    }
+
+    if (hasLab) {
+      entries.push({
+        ...course,
+        courseCode: `${course.courseCode} LAB`,
+        courseDescription: `${course.courseDescription} LAB`,
+        lecUnits: 0,
+        labUnits: course.labUnits,
+        totalUnits: roundHours(course.labUnits),
+        hours: calculateCurriculumHours(course.semester, 0, course.labUnits),
+      });
+    }
+
+    return entries;
+  });
+
+  return courses.sort((left, right) =>
+    left.courseCode.localeCompare(right.courseCode, undefined, { sensitivity: "base" })
+  );
+};
 
 const getEntryWeeklyHours = (entry: ScheduleEntry) => {
   const parsed24 = parseTimeRange(entry["Time (24 Hrs)"]);
@@ -422,6 +738,7 @@ export default function App() {
     entry: ScheduleEntry;
     day: string;
   } | null>(null);
+  const [copiedBlock, setCopiedBlock] = useState<ScheduleEntry | null>(null);
   const [filterText, setFilterText] = useState("");
   const [sortKey, setSortKey] = useState<typeof canonicalHeaders[number]>(
     "Course Code"
@@ -490,6 +807,18 @@ export default function App() {
   } | null>(null);
   const [isCsvImporting, setIsCsvImporting] = useState(false);
   const [csvInputKey, setCsvInputKey] = useState(0);
+  const [curricula, setCurricula] = useState<Curriculum[]>([]);
+  const [curriculumTerm, setCurriculumTerm] = useState<CurriculumTerm>("First Semester");
+  const [curriculumPreview, setCurriculumPreview] = useState<{
+    fileName: string;
+    name: string;
+    courses: CurriculumCourse[];
+  } | null>(null);
+  const [curriculumInputKey, setCurriculumInputKey] = useState(0);
+  const [sectionYearLevels, setSectionYearLevels] = useState<Record<string, string>>({});
+  const [yearLevelCurriculumIds, setYearLevelCurriculumIds] = useState<Record<string, string>>(
+    {}
+  );
   const [courseDescriptionSelections, setCourseDescriptionSelections] = useState<
     Record<string, string>
   >({});
@@ -508,6 +837,11 @@ export default function App() {
   const [sectionColorInput, setSectionColorInput] = useState("");
   const [sectionRgb, setSectionRgb] = useState({ r: 0, g: 0, b: 0 });
   const [showSectionAdvanced, setShowSectionAdvanced] = useState(false);
+  const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
+  const [sectionNameDrafts, setSectionNameDrafts] = useState<Record<number, string>>({});
+  const [sectionEditorError, setSectionEditorError] = useState("");
+  const [isCourseCodeMenuOpen, setIsCourseCodeMenuOpen] = useState(false);
+  const [courseCodeMenuPosition, setCourseCodeMenuPosition] = useState({ top: 0, left: 0 });
   const panelRef = useRef<HTMLDivElement | null>(null);
   const courseCodeRef = useRef<HTMLInputElement | null>(null);
   const timetableRef = useRef<HTMLDivElement | null>(null);
@@ -516,17 +850,56 @@ export default function App() {
   const customizeModalRef = useRef<HTMLDivElement | null>(null);
   const settingsSaveTimeout = useRef<number | null>(null);
 
+  const curriculumCourses = useMemo(
+    () => curricula.flatMap((curriculum) => curriculum.courses),
+    [curricula]
+  );
+
+  const curriculumState = useMemo(
+    () => ({
+      curricula,
+      selectedTerm: curriculumTerm,
+      sectionYearLevels,
+      yearLevelCurriculumIds,
+    }),
+    [curricula, curriculumTerm, sectionYearLevels, yearLevelCurriculumIds]
+  );
+
+  const conflictIgnoreSettings = useMemo(
+    () => ({
+      ignoreFaculty,
+      ignoreRoom,
+      ignoreTba,
+      ignoreFacultyList,
+      ignoreRoomList,
+      containsFaculty,
+      containsRoom,
+    }),
+    [
+      ignoreFaculty,
+      ignoreRoom,
+      ignoreTba,
+      ignoreFacultyList,
+      ignoreRoomList,
+      containsFaculty,
+      containsRoom,
+    ]
+  );
+
+  const applyConflictIgnoreSettings = (settings: ConflictIgnoreSettings) => {
+    setIgnoreFaculty(settings.ignoreFaculty);
+    setIgnoreRoom(settings.ignoreRoom);
+    setIgnoreTba(settings.ignoreTba);
+    setIgnoreFacultyList(settings.ignoreFacultyList);
+    setIgnoreRoomList(settings.ignoreRoomList);
+    setContainsFaculty(settings.containsFaculty);
+    setContainsRoom(settings.containsRoom);
+  };
+
   useEffect(() => {
     const storedProgram = localStorage.getItem("lastProgram");
     const storedSection = localStorage.getItem("lastSection");
     const storedZoom = localStorage.getItem("timetableZoom");
-    const storedIgnoreFaculty = localStorage.getItem("rulesIgnoreFaculty");
-    const storedIgnoreRoom = localStorage.getItem("rulesIgnoreRoom");
-    const storedIgnoreTba = localStorage.getItem("rulesIgnoreTba");
-    const storedIgnoreFacultyList = localStorage.getItem("rulesIgnoreFacultyList");
-    const storedIgnoreRoomList = localStorage.getItem("rulesIgnoreRoomList");
-    const storedContainsFaculty = localStorage.getItem("rulesContainsFaculty");
-    const storedContainsRoom = localStorage.getItem("rulesContainsRoom");
     setScheduleForm((prev) => ({
       ...prev,
       Program: storedProgram ?? prev.Program,
@@ -538,27 +911,7 @@ export default function App() {
         setZoomPercent(parsed);
       }
     }
-    if (storedIgnoreFaculty) {
-      setIgnoreFaculty(storedIgnoreFaculty === "true");
-    }
-    if (storedIgnoreRoom) {
-      setIgnoreRoom(storedIgnoreRoom === "true");
-    }
-    if (storedIgnoreTba) {
-      setIgnoreTba(storedIgnoreTba === "true");
-    }
-    if (storedIgnoreFacultyList) {
-      setIgnoreFacultyList(storedIgnoreFacultyList.split("|").filter(Boolean));
-    }
-    if (storedIgnoreRoomList) {
-      setIgnoreRoomList(storedIgnoreRoomList.split("|").filter(Boolean));
-    }
-    if (storedContainsFaculty) {
-      setContainsFaculty(storedContainsFaculty === "true");
-    }
-    if (storedContainsRoom) {
-      setContainsRoom(storedContainsRoom === "true");
-    }
+    LEGACY_RULE_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     const storedCustomize = localStorage.getItem(CUSTOMIZE_STORAGE_KEY);
     if (storedCustomize) {
       try {
@@ -570,49 +923,148 @@ export default function App() {
     }
   }, []);
 
-  const fetchConflicts = async () => {
+  const fetchConflicts = async (settings: ConflictIgnoreSettings = conflictIgnoreSettings) => {
     const params = new URLSearchParams();
-    params.set("ignore_faculty", String(ignoreFaculty));
-    params.set("ignore_room", String(ignoreRoom));
-    params.set("ignore_tba", String(ignoreTba));
-    if (ignoreFacultyList.length > 0) {
-      params.set("ignore_faculty_list", ignoreFacultyList.join(","));
+    params.set("ignore_faculty", String(settings.ignoreFaculty));
+    params.set("ignore_room", String(settings.ignoreRoom));
+    params.set("ignore_tba", String(settings.ignoreTba));
+    if (settings.ignoreFacultyList.length > 0) {
+      params.set("ignore_faculty_list", settings.ignoreFacultyList.join(","));
     }
-    if (ignoreRoomList.length > 0) {
-      params.set("ignore_room_list", ignoreRoomList.join(","));
+    if (settings.ignoreRoomList.length > 0) {
+      params.set("ignore_room_list", settings.ignoreRoomList.join(","));
     }
-    params.set("contains_faculty", String(containsFaculty));
-    params.set("contains_room", String(containsRoom));
+    params.set("contains_faculty", String(settings.containsFaculty));
+    params.set("contains_room", String(settings.containsRoom));
     const conflictsRes = await fetch(`${API_BASE}/conflicts?${params.toString()}`);
     setConflicts(await conflictsRes.json());
   };
 
-  const persistSettings = async (settings: CustomizeSettings) => {
+  const buildLegacyCurriculumState = (): CurriculumState => {
+    const storedState = localStorage.getItem(CURRICULUM_STATE_STORAGE_KEY);
+    if (storedState) {
+      try {
+        return normalizeCurriculumState(JSON.parse(storedState) as Partial<CurriculumState>);
+      } catch {
+        // Fall through to older single-curriculum storage.
+      }
+    }
+    const selectedTerm =
+      normalizeSemester(localStorage.getItem(CURRICULUM_TERM_STORAGE_KEY) ?? "") ??
+      defaultCurriculumState.selectedTerm;
+    let curricula: Curriculum[] = [];
+    const storedCurriculum = localStorage.getItem(CURRICULUM_STORAGE_KEY);
+    const storedVersion = localStorage.getItem(CURRICULUM_STORAGE_VERSION_KEY);
+    if (storedCurriculum && (storedVersion === "2" || storedVersion === CURRICULUM_STORAGE_VERSION)) {
+      try {
+        const parsed = JSON.parse(storedCurriculum) as CurriculumCourse[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          curricula = [
+            {
+              id: buildCurriculumId(),
+              name: "Imported Curriculum",
+              sourceFileName: "localStorage",
+              importedAt: new Date().toISOString(),
+              courses: parsed,
+            },
+          ];
+        }
+      } catch {
+        curricula = [];
+      }
+    }
+    let sectionYearLevels: Record<string, string> = {};
+    const storedSectionYearLevels = localStorage.getItem(SECTION_YEAR_LEVELS_STORAGE_KEY);
+    if (storedSectionYearLevels) {
+      try {
+        const parsed = JSON.parse(storedSectionYearLevels) as Record<string, string>;
+        sectionYearLevels = parsed && typeof parsed === "object" ? parsed : {};
+      } catch {
+        sectionYearLevels = {};
+      }
+    }
+    return {
+      curricula,
+      selectedTerm,
+      sectionYearLevels,
+      yearLevelCurriculumIds: {},
+    };
+  };
+
+  const applyCurriculumState = (state: CurriculumState) => {
+    const normalized = normalizeCurriculumState(state);
+    setCurricula(normalized.curricula);
+    setCurriculumTerm(normalized.selectedTerm);
+    setSectionYearLevels(normalized.sectionYearLevels);
+    setYearLevelCurriculumIds(normalized.yearLevelCurriculumIds);
+  };
+
+  const persistSettings = async (
+    settings: CustomizeSettings,
+    nextCurriculumState: CurriculumState,
+    nextConflictIgnoreSettings: ConflictIgnoreSettings = conflictIgnoreSettings
+  ) => {
     await fetch(`${API_BASE}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ settings }),
+      body: JSON.stringify({
+        settings: {
+          customize: settings,
+          curriculumState: nextCurriculumState,
+          conflictIgnore: nextConflictIgnoreSettings,
+        },
+      }),
     });
   };
 
-  const loadSettingsFromServer = async () => {
+  const loadSettingsFromServer = async (): Promise<ConflictIgnoreSettings> => {
     const res = await fetch(`${API_BASE}/settings`);
     if (!res.ok) {
+      applyCurriculumState(buildLegacyCurriculumState());
+      applyConflictIgnoreSettings(defaultConflictIgnoreSettings);
       setSettingsLoaded(true);
-      return;
+      return defaultConflictIgnoreSettings;
     }
     const data = await res.json();
-    if (data?.settings && Object.keys(data.settings).length > 0) {
-      setCustomizeSettings(normalizeCustomizeSettings(data.settings));
+    const settings = data?.settings ?? {};
+    const loadedConflictIgnoreSettings = settings.conflictIgnore
+      ? normalizeConflictIgnoreSettings(settings.conflictIgnore)
+      : defaultConflictIgnoreSettings;
+    const hasSettings = settings && Object.keys(settings).length > 0;
+    if (hasSettings) {
+      if (settings.customize) {
+        setCustomizeSettings(normalizeCustomizeSettings(settings.customize));
+      } else if (isCustomizeSettingsShape(settings)) {
+        setCustomizeSettings(normalizeCustomizeSettings(settings));
+      }
     }
+    if (settings.curriculumState) {
+      applyCurriculumState(settings.curriculumState);
+    } else {
+      const legacyCurriculumState = buildLegacyCurriculumState();
+      applyCurriculumState(legacyCurriculumState);
+      if (legacyCurriculumState.curricula.length > 0 || Object.keys(legacyCurriculumState.sectionYearLevels).length > 0) {
+        await persistSettings(
+          settings.customize
+            ? normalizeCustomizeSettings(settings.customize)
+            : isCustomizeSettingsShape(settings)
+              ? normalizeCustomizeSettings(settings)
+              : customizeSettings,
+          legacyCurriculumState,
+          loadedConflictIgnoreSettings
+        );
+      }
+    }
+    applyConflictIgnoreSettings(loadedConflictIgnoreSettings);
     setSettingsLoaded(true);
+    return loadedConflictIgnoreSettings;
   };
 
   const pushUndoAction = (action: UndoAction) => {
     setUndoStack((prev) => [action, ...prev].slice(0, 20));
   };
 
-  const refreshAll = async () => {
+  const refreshAll = async (conflictSettings: ConflictIgnoreSettings = conflictIgnoreSettings) => {
     const [scheduleRes, sectionsRes, facultyRes, roomsRes] = await Promise.all([
       fetch(`${API_BASE}/schedule`),
       fetch(`${API_BASE}/sections`),
@@ -623,25 +1075,22 @@ export default function App() {
     setSections(await sectionsRes.json());
     setFaculty(await facultyRes.json());
     setRooms(await roomsRes.json());
-    await fetchConflicts();
+    await fetchConflicts(conflictSettings);
     if (currentViewConfig.selected && viewMode.startsWith("timetable")) {
       await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
     }
   };
 
   useEffect(() => {
-    refreshAll();
-    loadSettingsFromServer();
+    const initialize = async () => {
+      const loadedConflictIgnoreSettings = await loadSettingsFromServer();
+      await refreshAll(loadedConflictIgnoreSettings);
+    };
+    initialize();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("rulesIgnoreFaculty", String(ignoreFaculty));
-    localStorage.setItem("rulesIgnoreRoom", String(ignoreRoom));
-    localStorage.setItem("rulesIgnoreTba", String(ignoreTba));
-    localStorage.setItem("rulesIgnoreFacultyList", ignoreFacultyList.join("|"));
-    localStorage.setItem("rulesIgnoreRoomList", ignoreRoomList.join("|"));
-    localStorage.setItem("rulesContainsFaculty", String(containsFaculty));
-    localStorage.setItem("rulesContainsRoom", String(containsRoom));
+    if (!settingsLoaded) return;
     fetchConflicts();
   }, [
     ignoreFaculty,
@@ -651,6 +1100,7 @@ export default function App() {
     ignoreRoomList,
     containsFaculty,
     containsRoom,
+    settingsLoaded,
   ]);
 
   useEffect(() => {
@@ -660,14 +1110,31 @@ export default function App() {
       window.clearTimeout(settingsSaveTimeout.current);
     }
     settingsSaveTimeout.current = window.setTimeout(() => {
-      persistSettings(customizeSettings);
+      persistSettings(customizeSettings, curriculumState);
     }, 300);
     return () => {
       if (settingsSaveTimeout.current) {
         window.clearTimeout(settingsSaveTimeout.current);
       }
     };
-  }, [customizeSettings, settingsLoaded]);
+  }, [customizeSettings, curriculumState, conflictIgnoreSettings, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    localStorage.setItem(CURRICULUM_TERM_STORAGE_KEY, curriculumTerm);
+  }, [curriculumTerm, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    localStorage.setItem(SECTION_YEAR_LEVELS_STORAGE_KEY, JSON.stringify(sectionYearLevels));
+  }, [sectionYearLevels, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    localStorage.setItem(CURRICULUM_STATE_STORAGE_KEY, JSON.stringify(curriculumState));
+    localStorage.setItem(CURRICULUM_STORAGE_KEY, JSON.stringify(curriculumCourses));
+    localStorage.setItem(CURRICULUM_STORAGE_VERSION_KEY, CURRICULUM_STORAGE_VERSION);
+  }, [curriculumCourses, curriculumState, settingsLoaded]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -819,6 +1286,10 @@ export default function App() {
     candidate: ScheduleEntry,
     candidateId: number | null
   ) => {
+    const curriculumCourse = getCurriculumCourse(candidate["Course Code"], candidate.Section);
+    if (curriculumCourse) {
+      return curriculumCourse.hours;
+    }
     const sectionKey = normalizeMatchValue(candidate.Section);
     const courseKey = normalizeMatchValue(candidate["Course Code"]);
     const candidateHours = getEntryWeeklyHours(candidate);
@@ -836,9 +1307,144 @@ export default function App() {
     return roundHours(existingHours + candidateHours);
   };
 
+  const activeCurriculumCourses = useMemo(
+    () => curriculumCourses.filter((course) => course.semester === curriculumTerm),
+    [curriculumCourses, curriculumTerm]
+  );
+
+  const getCurriculumById = (curriculumId: string) =>
+    curricula.find((curriculum) => curriculum.id === curriculumId);
+
+  const curriculumYearLevels = useMemo(() => {
+    const yearLevels = new Set<string>();
+    curriculumCourses.forEach((course) => {
+      if (course.yearLevel.trim()) {
+        yearLevels.add(course.yearLevel.trim());
+      }
+    });
+    return [...yearLevels].sort(compareYearLevels);
+  }, [curriculumCourses]);
+
+  const getSectionYearLevel = (section: string) =>
+    sectionYearLevels[normalizeMatchValue(section)] ?? "";
+
+  const getYearLevelCurriculumId = (yearLevel: string) =>
+    yearLevelCurriculumIds[normalizeMatchValue(yearLevel)] ?? "";
+
+  const getYearLevelCurriculum = (yearLevel: string) => {
+    const curriculumId = getYearLevelCurriculumId(yearLevel);
+    return curriculumId ? getCurriculumById(curriculumId) : undefined;
+  };
+
+  const getSectionCurriculumScope = (section: string) => {
+    const yearLevel = getSectionYearLevel(section);
+    return {
+      yearLevelKey: normalizeMatchValue(yearLevel),
+      curriculumId: yearLevel ? getYearLevelCurriculumId(yearLevel) : "",
+    };
+  };
+
+  const isSameCurriculumScope = (leftSection: string, rightSection: string) => {
+    const left = getSectionCurriculumScope(leftSection);
+    const right = getSectionCurriculumScope(rightSection);
+    const hasScopedAssignment =
+      left.yearLevelKey || right.yearLevelKey || left.curriculumId || right.curriculumId;
+    if (!hasScopedAssignment) return true;
+    return left.yearLevelKey === right.yearLevelKey && left.curriculumId === right.curriculumId;
+  };
+
+  const getCurriculumCoursesForSection = (section: string) => {
+    const yearLevel = getSectionYearLevel(section);
+    const assignedCurriculum = yearLevel ? getYearLevelCurriculum(yearLevel) : undefined;
+    const courses = assignedCurriculum?.courses ?? curriculumCourses;
+    const activeCourses = courses.filter((course) => course.semester === curriculumTerm);
+    if (!yearLevel) return activeCourses;
+    const yearLevelCourses = activeCourses.filter(
+      (course) => normalizeMatchValue(course.yearLevel) === normalizeMatchValue(yearLevel)
+    );
+    return yearLevelCourses.length > 0 ? yearLevelCourses : activeCourses;
+  };
+
+  const getCurriculumCourse = (courseCode: string, section = "") => {
+    const courseKey = normalizeMatchValue(courseCode);
+    return getCurriculumCoursesForSection(section).find(
+      (course) => normalizeMatchValue(course.courseCode) === courseKey
+    );
+  };
+
+  const formSectionYearLevel = getSectionYearLevel(scheduleForm.Section);
+
+  const getPlottedCourseHours = (
+    section: string,
+    courseCode: string,
+    excludedEntryId: number | null = null
+  ) => {
+    const sectionKey = normalizeMatchValue(section);
+    const courseKey = normalizeMatchValue(courseCode);
+    if (!sectionKey || !courseKey) return 0;
+    return roundHours(
+      entries
+        .filter(
+          (entry) =>
+            entry.id !== excludedEntryId &&
+            normalizeMatchValue(entry.Section) === sectionKey &&
+            normalizeMatchValue(entry["Course Code"]) === courseKey
+        )
+        .reduce((total, entry) => total + getEntryWeeklyHours(entry), 0)
+    );
+  };
+
+  const getCoursePlotStatus = (
+    courseCode: string,
+    section = scheduleForm.Section,
+    excludedEntryId: number | null = null
+  ) => {
+    const curriculumCourse = getCurriculumCourse(courseCode, section);
+    const plottedHours = getPlottedCourseHours(section, courseCode, excludedEntryId);
+    const requiredHours = curriculumCourse?.hours ?? null;
+    return {
+      plottedHours,
+      requiredHours,
+      isComplete:
+        requiredHours !== null && Math.abs(roundHours(plottedHours - requiredHours)) < 0.01,
+    };
+  };
+
+  const getCourseCodeOptionLabel = (courseCode: string) => {
+    const canonicalDescription = getCanonicalCourseDescriptionForSection(
+      courseCode,
+      scheduleForm.Section
+    );
+    const status = getCoursePlotStatus(courseCode, scheduleForm.Section, null);
+    const plottedLabel =
+      status.requiredHours !== null
+        ? `${formatHoursLabel(status.plottedHours)}/${formatHoursLabel(status.requiredHours)} hrs plotted`
+        : `${formatHoursLabel(status.plottedHours)} hrs plotted`;
+    return [canonicalDescription, plottedLabel].filter(Boolean).join(" - ");
+  };
+
+  const selectedCoursePlotStatus = getCoursePlotStatus(
+    scheduleForm["Course Code"],
+    scheduleForm.Section,
+    null
+  );
+
   const courseDescriptionCatalog = useMemo(() => {
     const descriptionsByCode: Record<string, Map<string, { label: string; ids: number[] }>> = {};
     const displayCodeByKey: Record<string, string> = {};
+    activeCurriculumCourses.forEach((course) => {
+      const codeKey = normalizeMatchValue(course.courseCode);
+      const descriptionKey = normalizeMatchValue(course.courseDescription);
+      if (!codeKey || !descriptionKey) return;
+      displayCodeByKey[codeKey] = course.courseCode;
+      if (!descriptionsByCode[codeKey]) {
+        descriptionsByCode[codeKey] = new Map();
+      }
+      descriptionsByCode[codeKey].set(descriptionKey, {
+        label: course.courseDescription,
+        ids: [],
+      });
+    });
     entries.forEach((entry) => {
       const code = entry["Course Code"].trim();
       const description = entry["Course Description"].trim();
@@ -869,14 +1475,20 @@ export default function App() {
         }
         return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
       });
-      canonicalDescriptions[codeKey] = sortedDescriptions[0]?.label ?? "";
-      if (sortedDescriptions.length > 1) {
+      canonicalDescriptions[codeKey] =
+        activeCurriculumCourses.find(
+          (course) => normalizeMatchValue(course.courseCode) === codeKey
+        )?.courseDescription ??
+        sortedDescriptions[0]?.label ??
+        "";
+      const scheduledDescriptions = sortedDescriptions.filter((item) => item.ids.length > 0);
+      if (scheduledDescriptions.length > 1) {
         conflicts.push({
           codeKey,
           code: displayCodeByKey[codeKey],
-          descriptions: sortedDescriptions.map((item) => item.label),
+          descriptions: scheduledDescriptions.map((item) => item.label),
           entryIdsByDescription: Object.fromEntries(
-            sortedDescriptions.map((item) => [item.label, item.ids])
+            scheduledDescriptions.map((item) => [item.label, item.ids])
           ),
         });
       }
@@ -891,7 +1503,53 @@ export default function App() {
         left.localeCompare(right, undefined, { sensitivity: "base" })
       ),
     };
-  }, [entries]);
+  }, [activeCurriculumCourses, entries]);
+
+  const formCourseCodeOptions = useMemo(() => {
+    const curriculumCodes = getCurriculumCoursesForSection(scheduleForm.Section).map(
+      (course) => course.courseCode
+    );
+    const fallbackCodes = formSectionYearLevel
+      ? entries
+          .filter(
+            (entry) =>
+              normalizeMatchValue(entry.Section) === normalizeMatchValue(scheduleForm.Section)
+          )
+          .map((entry) => entry["Course Code"])
+      : courseDescriptionCatalog.courseCodes;
+    return [...new Set([...curriculumCodes, ...fallbackCodes])].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base" })
+    );
+  }, [
+    activeCurriculumCourses,
+    courseDescriptionCatalog.courseCodes,
+    entries,
+    formSectionYearLevel,
+    scheduleForm.Section,
+    sectionYearLevels,
+  ]);
+
+  const visibleCourseCodeOptions = useMemo(() => {
+    const query = normalizeMatchValue(scheduleForm["Course Code"]);
+    const options = query
+      ? formCourseCodeOptions.filter((courseCode) =>
+          normalizeMatchValue(courseCode).includes(query)
+        )
+      : formCourseCodeOptions;
+    return options.slice(0, 36);
+  }, [formCourseCodeOptions, scheduleForm["Course Code"]]);
+
+  const openCourseCodeMenu = () => {
+    const rect = courseCodeRef.current?.getBoundingClientRect();
+    if (rect) {
+      const menuWidth = Math.min(620, window.innerWidth - 32);
+      setCourseCodeMenuPosition({
+        top: Math.max(8, rect.top - 40),
+        left: Math.max(8, rect.left - menuWidth - 10),
+      });
+    }
+    setIsCourseCodeMenuOpen(true);
+  };
 
   const courseDescriptionConflictSignature = useMemo(
     () =>
@@ -923,12 +1581,25 @@ export default function App() {
   }, [courseDescriptionCatalog, courseDescriptionConflictSignature]);
 
   const getCanonicalCourseDescription = (courseCode: string) =>
-    courseDescriptionCatalog.canonicalDescriptions[normalizeMatchValue(courseCode)] ?? "";
+    getCurriculumCourse(courseCode, scheduleForm.Section)?.courseDescription ??
+    courseDescriptionCatalog.canonicalDescriptions[normalizeMatchValue(courseCode)] ??
+    "";
+
+  const getCanonicalCourseDescriptionForSection = (courseCode: string, section: string) =>
+    getCurriculumCourse(courseCode, section)?.courseDescription ??
+    courseDescriptionCatalog.canonicalDescriptions[normalizeMatchValue(courseCode)] ??
+    "";
 
   const withCanonicalCourseDescription = (entry: ScheduleEntry) => {
-    const canonical = getCanonicalCourseDescription(entry["Course Code"]);
-    if (!canonical) return entry;
-    return { ...entry, "Course Description": canonical };
+    const canonical = getCanonicalCourseDescriptionForSection(entry["Course Code"], entry.Section);
+    const curriculumCourse = getCurriculumCourse(entry["Course Code"], entry.Section);
+    return {
+      ...entry,
+      "Course Description": canonical || entry["Course Description"],
+      Units: curriculumCourse?.totalUnits ?? entry.Units,
+      "# of Hours": curriculumCourse?.hours ?? entry["# of Hours"],
+      Program: curriculumCourse?.program || entry.Program,
+    };
   };
 
   const updateMatchingCourseDescriptions = async (source: ScheduleEntry) => {
@@ -939,6 +1610,7 @@ export default function App() {
       .filter(
         (entry) =>
           normalizeMatchValue(entry["Course Code"]) === codeKey &&
+          isSameCurriculumScope(entry.Section, source.Section) &&
           entry["Course Description"].trim() !== description
       )
       .map((entry) =>
@@ -952,22 +1624,32 @@ export default function App() {
   };
 
   const applyCourseCodeToScheduleForm = (courseCode: string) => {
-    const canonical = getCanonicalCourseDescription(courseCode);
     setScheduleForm((prev) => ({
       ...prev,
       "Course Code": courseCode,
-      "Course Description": canonical || prev["Course Description"],
+      "Course Description":
+        getCanonicalCourseDescriptionForSection(courseCode, prev.Section) ||
+        prev["Course Description"],
+      Units: getCurriculumCourse(courseCode, prev.Section)?.totalUnits ?? prev.Units,
+      "# of Hours":
+        getCurriculumCourse(courseCode, prev.Section)?.hours ?? prev["# of Hours"],
+      Program: getCurriculumCourse(courseCode, prev.Section)?.program || prev.Program,
     }));
   };
 
   const applyCourseCodeToEditEntry = (courseCode: string) => {
-    const canonical = getCanonicalCourseDescription(courseCode);
     setEditEntry((prev) =>
       prev
         ? {
             ...prev,
             "Course Code": courseCode,
-            "Course Description": canonical || prev["Course Description"],
+            "Course Description":
+              getCanonicalCourseDescriptionForSection(courseCode, prev.Section) ||
+              prev["Course Description"],
+            Units: getCurriculumCourse(courseCode, prev.Section)?.totalUnits ?? prev.Units,
+            "# of Hours":
+              getCurriculumCourse(courseCode, prev.Section)?.hours ?? prev["# of Hours"],
+            Program: getCurriculumCourse(courseCode, prev.Section)?.program || prev.Program,
           }
         : prev
     );
@@ -1046,9 +1728,9 @@ export default function App() {
         normalizeMatchValue(entry.Section) === sectionKey &&
         normalizeMatchValue(entry["Course Code"]) === courseKey
     );
-    const totalHours = roundHours(
-      remaining.reduce((total, entry) => total + getEntryWeeklyHours(entry), 0)
-    );
+    const totalHours =
+      getCurriculumCourse(removed["Course Code"], removed.Section)?.hours ??
+      roundHours(remaining.reduce((total, entry) => total + getEntryWeeklyHours(entry), 0));
     await Promise.all(
       remaining
         .filter((entry) => entry["# of Hours"] !== totalHours)
@@ -1078,6 +1760,10 @@ export default function App() {
     scheduleForm["Time (LPU Std)"],
     scheduleForm["Time (24 Hrs)"],
     scheduleForm.Days,
+    curriculumTerm,
+    curriculumCourses,
+    sectionYearLevels,
+    yearLevelCurriculumIds,
   ]);
 
   useEffect(() => {
@@ -1228,7 +1914,10 @@ export default function App() {
       .join(", ");
   };
 
-  const buildConflictMessage = (conflictsList: MoveConflictDetail[]) => {
+  const buildConflictMessage = (
+    conflictsList: MoveConflictDetail[],
+    lead = "Move blocked"
+  ) => {
     const details = conflictsList.map((conflict) => {
       const entry = conflict.entry;
       const typeLabel = conflict.conflict_type === "room" ? "ROOM" : "FACULTY";
@@ -1240,7 +1929,7 @@ export default function App() {
       const daysLabel = formatDaysForDisplay(entry.Days);
       return `${typeLabel} ${owner} — ${entry.Section} / ${entry["Course Code"]} — ${daysLabel} ${timeLabel} (Room ${entry.Room}, Faculty ${entry.Faculty})`;
     });
-    return `Move blocked: conflicts with ${details.join(" | ")}.`;
+    return `${lead}: conflicts with ${details.join(" | ")}.`;
   };
 
   const checkMoveConflicts = async (entry: ScheduleEntry, payload: ScheduleEntry) => {
@@ -1487,9 +2176,74 @@ export default function App() {
     setBlockMenu({ x: event.clientX, y: event.clientY, entry, day });
   };
 
-  const duplicateEntryToNextDay = async () => {
-    if (!blockMenu || isSaving) return;
-    const { entry, day } = blockMenu;
+  const copyBlock = () => {
+    if (!blockMenu) return;
+    setCopiedBlock(blockMenu.entry);
+    setToast({
+      message: `Copied ${blockMenu.entry["Course Code"]} from ${blockMenu.entry.Section}`,
+      showRevert: false,
+    });
+    setBlockMenu(null);
+  };
+
+  const pasteCopiedBlockToCurrentSection = async () => {
+    if (!copiedBlock || isSaving) return;
+    if (viewMode !== "timetable-section" || !currentViewConfig.selected) {
+      setToast({ message: "Paste is available in section timetable view.", showRevert: false });
+      setContextMenu(null);
+      return;
+    }
+    const targetSection = currentViewConfig.selected;
+    let payload = withCalculatedHours(
+      withCanonicalCourseDescription({
+        ...copiedBlock,
+        id: 0,
+        Section: targetSection,
+      }),
+      null
+    );
+    const pasteCheck = await checkMoveConflicts(payload, payload);
+    if (!pasteCheck.ok && pasteCheck.reason === "conflict" && pasteCheck.conflicts?.length) {
+      payload = withCalculatedHours(
+        withCanonicalCourseDescription({
+          ...payload,
+          Room: "TBA",
+          Faculty: "TBA",
+        }),
+        null
+      );
+    }
+    setIsSaving(true);
+    const createResponse = await fetch(`${API_BASE}/schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const created = await createResponse.json();
+    if (created?.id) {
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
+      await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
+      pushUndoAction({
+        type: "add",
+        entryId: created.id,
+        label: `Paste Class: ${payload["Course Code"]}`,
+      });
+      setToast({
+        message:
+          !pasteCheck.ok && pasteCheck.reason === "conflict"
+            ? `Pasted ${payload["Course Code"]} to ${targetSection} with TBA room/faculty`
+            : `Pasted ${payload["Course Code"]} to ${targetSection}`,
+        showRevert: false,
+      });
+    }
+    setContextMenu(null);
+    setBlockMenu(null);
+    await refreshAll();
+    setIsSaving(false);
+  };
+
+  const duplicateEntryToNextDay = async (entry: ScheduleEntry, day: string) => {
+    if (isSaving) return;
     const nextDay = getNextDay(day);
     if (!nextDay) return;
     const payload = withCalculatedHours(
@@ -2004,7 +2758,7 @@ export default function App() {
   };
 
   const handleExportDb = async () => {
-    await persistSettings(customizeSettings);
+    await persistSettings(customizeSettings, curriculumState);
     const res = await fetch(`${API_BASE}/file/export`);
     const blob = await res.blob();
     downloadBlob(blob, "scheduler.db");
@@ -2017,8 +2771,8 @@ export default function App() {
     form.append("file", file);
     await fetch(`${API_BASE}/file/import`, { method: "POST", body: form });
     setUndoStack([]);
-    await refreshAll();
-    loadSettingsFromServer();
+    const loadedConflictIgnoreSettings = await loadSettingsFromServer();
+    await refreshAll(loadedConflictIgnoreSettings);
   };
 
   const handleImportCsvPreview = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2053,6 +2807,157 @@ export default function App() {
 
   const handleCancelCsvImport = () => {
     setCsvImportState(null);
+  };
+
+  const handleLoadCurriculum = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const courses = parseCurriculumCsv(text);
+      setCurriculumPreview({ fileName: file.name, name: getFileBaseName(file.name), courses });
+      const firstAvailableTerm = curriculumTerms.find((term) =>
+        courses.some((course) => course.semester === term)
+      );
+      if (firstAvailableTerm) {
+        setCurriculumTerm(firstAvailableTerm);
+      }
+    } catch (error) {
+      setToast({
+        message: error instanceof Error ? error.message : "Could not load curriculum",
+        showRevert: false,
+      });
+    }
+    setCurriculumInputKey((prev) => prev + 1);
+    setOpenMenu(null);
+  };
+
+  const handleConfirmCurriculumLoad = () => {
+    if (!curriculumPreview) return;
+    const name = curriculumPreview.name.trim() || getFileBaseName(curriculumPreview.fileName);
+    const curriculum: Curriculum = {
+      id: buildCurriculumId(),
+      name,
+      sourceFileName: curriculumPreview.fileName,
+      importedAt: new Date().toISOString(),
+      courses: curriculumPreview.courses,
+    };
+    setCurricula((prev) => [...prev, curriculum]);
+    setCurriculumPreview(null);
+    setToast({
+      message: `Loaded ${curriculumPreview.courses.length} curriculum courses into ${name}`,
+      showRevert: false,
+    });
+  };
+
+  const handleClearCurriculum = () => {
+    setCurricula([]);
+    setCurriculumPreview(null);
+    setYearLevelCurriculumIds({});
+    localStorage.removeItem(CURRICULUM_STORAGE_KEY);
+    localStorage.removeItem(CURRICULUM_STATE_STORAGE_KEY);
+    localStorage.removeItem(CURRICULUM_STORAGE_VERSION_KEY);
+    setToast({ message: "Curricula cleared", showRevert: false });
+  };
+
+  const handleRemoveCurriculum = (curriculumId: string) => {
+    const curriculum = getCurriculumById(curriculumId);
+    setCurricula((prev) => prev.filter((item) => item.id !== curriculumId));
+    setYearLevelCurriculumIds((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([, assignedId]) => assignedId !== curriculumId)
+      )
+    );
+    setToast({
+      message: curriculum ? `Removed ${curriculum.name}` : "Curriculum removed",
+      showRevert: false,
+    });
+  };
+
+  const updateSectionYearLevel = (section: string, yearLevel: string) => {
+    const sectionKey = normalizeMatchValue(section);
+    if (!sectionKey) return;
+    setSectionYearLevels((prev) => {
+      const next = { ...prev };
+      if (yearLevel) {
+        next[sectionKey] = yearLevel;
+      } else {
+        delete next[sectionKey];
+      }
+      return next;
+    });
+  };
+
+  const updateYearLevelCurriculum = (yearLevel: string, curriculumId: string) => {
+    const yearLevelKey = normalizeMatchValue(yearLevel);
+    if (!yearLevelKey) return;
+    setYearLevelCurriculumIds((prev) => {
+      const next = { ...prev };
+      if (curriculumId) {
+        next[yearLevelKey] = curriculumId;
+      } else {
+        delete next[yearLevelKey];
+      }
+      return next;
+    });
+  };
+
+  const openSectionEditor = () => {
+    setSectionNameDrafts(
+      Object.fromEntries(sections.map((section) => [section.id, section.name]))
+    );
+    setSectionEditorError("");
+    setOpenMenu(null);
+    setIsSectionEditorOpen(true);
+  };
+
+  const handleRenameSection = async (section: NamedEntity) => {
+    const nextName = (sectionNameDrafts[section.id] ?? section.name).trim();
+    if (!nextName) {
+      setSectionEditorError("Section name cannot be blank.");
+      return;
+    }
+    if (nextName === section.name) return;
+    const response = await fetch(`${API_BASE}/sections/${section.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName }),
+    });
+    if (!response.ok) {
+      setSectionEditorError("Could not rename section.");
+      return;
+    }
+    const oldKey = normalizeMatchValue(section.name);
+    const nextKey = normalizeMatchValue(nextName);
+    setSectionYearLevels((prev) => {
+      const next = { ...prev };
+      if (next[oldKey]) {
+        next[nextKey] = next[oldKey];
+        delete next[oldKey];
+      }
+      return next;
+    });
+    setScheduleForm((prev) =>
+      normalizeMatchValue(prev.Section) === oldKey ? { ...prev, Section: nextName } : prev
+    );
+    setSectionNameDrafts((prev) => ({ ...prev, [section.id]: nextName }));
+    await refreshAll();
+  };
+
+  const handleDeleteSection = async (section: NamedEntity) => {
+    const response = await fetch(`${API_BASE}/sections/${section.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      setSectionEditorError(body?.detail ?? "Could not delete section.");
+      return;
+    }
+    const sectionKey = normalizeMatchValue(section.name);
+    setSectionYearLevels((prev) => {
+      const next = { ...prev };
+      delete next[sectionKey];
+      return next;
+    });
+    await refreshAll();
   };
 
   const handleCustomizeToggle = () => {
@@ -2341,6 +3246,45 @@ export default function App() {
                       onChange={handleImportCsvPreview}
                     />
                   </label>
+                  <div className="menu-divider" />
+                  <label className="menu-item file-input">
+                    Load Curriculum
+                    <input
+                      key={curriculumInputKey}
+                      type="file"
+                      accept=".csv"
+                      onChange={handleLoadCurriculum}
+                    />
+                  </label>
+                  {curricula.length > 0 ? (
+                    <>
+                      <label className="menu-checkbox menu-select">
+                        Semester
+                        <select
+                          value={curriculumTerm}
+                          onChange={(event) =>
+                            setCurriculumTerm(event.target.value as CurriculumTerm)
+                          }
+                        >
+                          {curriculumTerms.map((term) => (
+                            <option key={term} value={term}>
+                              {term}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        className="menu-item"
+                        onClick={() => {
+                          handleClearCurriculum();
+                          setOpenMenu(null);
+                        }}
+                        type="button"
+                      >
+                        Clear Curricula
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -2352,6 +3296,11 @@ export default function App() {
                 disabled={undoStack.length === 0 || isSaving}
               >
                 Undo
+              </button>
+            </div>
+            <div className="menu-group">
+              <button className="menu-button" type="button" onClick={openSectionEditor}>
+                Section Editor
               </button>
             </div>
             <div className="menu-group">
@@ -2646,6 +3595,59 @@ export default function App() {
           </button>
         </div>
       ) : null}
+      {curriculumPreview ? (
+        <div className="modal-overlay">
+          <div className="modal">
+            <h3>Load Curriculum</h3>
+            <p>
+              {curriculumPreview.fileName} contains{" "}
+              <strong>{curriculumPreview.courses.length}</strong> courses.
+            </p>
+            <label className="modal-field">
+              Name
+              <input
+                value={curriculumPreview.name}
+                onChange={(event) =>
+                  setCurriculumPreview((prev) =>
+                    prev ? { ...prev, name: event.target.value } : prev
+                  )
+                }
+              />
+            </label>
+            <label className="modal-field">
+              Semester
+              <select
+                value={curriculumTerm}
+                onChange={(event) => setCurriculumTerm(event.target.value as CurriculumTerm)}
+              >
+                {curriculumTerms.map((term) => {
+                  const count = curriculumPreview.courses.filter(
+                    (course) => course.semester === term
+                  ).length;
+                  return (
+                    <option key={term} value={term}>
+                      {term} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <div className="modal-note">
+              Hours use curriculum units: lecture units count as 1 hour in first/second
+              semester, lab units count as 3 hours, and term break lecture units count as
+              4.25 hours.
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setCurriculumPreview(null)}>
+                Cancel
+              </button>
+              <button type="button" onClick={handleConfirmCurriculumLoad}>
+                Load
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {csvImportState ? (
         <div className="modal-overlay">
           <div className="modal">
@@ -2686,6 +3688,114 @@ export default function App() {
                 }
               >
                 {isCsvImporting ? "Importing..." : "Yes, Replace"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isSectionEditorOpen ? (
+        <div className="modal-overlay">
+          <div className="modal modal-wide">
+            <div className="modal-header">
+              <h3>Section Editor</h3>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setIsSectionEditorOpen(false)}
+              >
+                x
+              </button>
+            </div>
+            {curricula.length > 0 ? (
+              <div className="section-editor-panel">
+                <h4>Curricula</h4>
+                <div className="curriculum-editor-list">
+                  {curricula.map((curriculum) => (
+                    <div key={curriculum.id} className="curriculum-editor-row">
+                      <span>
+                        {curriculum.name} ({curriculum.courses.length} courses)
+                      </span>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => handleRemoveCurriculum(curriculum.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {curriculumYearLevels.length > 0 ? (
+                  <div className="year-curriculum-list">
+                    {curriculumYearLevels.map((yearLevel) => (
+                      <label key={yearLevel} className="year-curriculum-row">
+                        {yearLevel}
+                        <select
+                          value={getYearLevelCurriculumId(yearLevel)}
+                          onChange={(event) =>
+                            updateYearLevelCurriculum(yearLevel, event.target.value)
+                          }
+                        >
+                          <option value="">All curricula</option>
+                          {curricula.map((curriculum) => (
+                            <option key={curriculum.id} value={curriculum.id}>
+                              {curriculum.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {sections.length === 0 ? (
+              <p>No sections yet.</p>
+            ) : (
+              <div className="section-editor-list">
+                {sections.map((section) => (
+                  <div key={section.id} className="section-editor-row">
+                    <input
+                      value={sectionNameDrafts[section.id] ?? section.name}
+                      onChange={(event) =>
+                        setSectionNameDrafts((prev) => ({
+                          ...prev,
+                          [section.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <select
+                      value={getSectionYearLevel(section.name)}
+                      onChange={(event) =>
+                        updateSectionYearLevel(section.name, event.target.value)
+                      }
+                      disabled={curriculumYearLevels.length === 0}
+                    >
+                      <option value="">All year levels</option>
+                      {curriculumYearLevels.map((yearLevel) => (
+                        <option key={yearLevel} value={yearLevel}>
+                          {yearLevel}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="button" onClick={() => handleRenameSection(section)}>
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={() => handleDeleteSection(section)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {sectionEditorError ? <p className="error">{sectionEditorError}</p> : null}
+            <div className="modal-actions">
+              <button type="button" onClick={() => setIsSectionEditorOpen(false)}>
+                Close
               </button>
             </div>
           </div>
@@ -3096,7 +4206,12 @@ export default function App() {
                               readOnly={
                                 header === "Time (24 Hrs)" ||
                                 (header === "Course Description" &&
-                                  Boolean(getCanonicalCourseDescription(editEntry["Course Code"])))
+                                  Boolean(
+                                    getCanonicalCourseDescriptionForSection(
+                                      editEntry["Course Code"],
+                                      editEntry.Section
+                                    )
+                                  ))
                               }
                               onChange={(event) => {
                                 const value = event.target.value;
@@ -3105,8 +4220,9 @@ export default function App() {
                                   return;
                                 }
                                 if (header === "Course Description") {
-                                  const canonical = getCanonicalCourseDescription(
-                                    editEntry["Course Code"]
+                                  const canonical = getCanonicalCourseDescriptionForSection(
+                                    editEntry["Course Code"],
+                                    editEntry.Section
                                   );
                                   setEditEntry({
                                     ...editEntry,
@@ -3396,6 +4512,11 @@ export default function App() {
                   style={{ top: contextMenu.y, left: contextMenu.x }}
                 >
                   <button onClick={applySelectionToForm}>Add Class</button>
+                  {viewMode === "timetable-section" && copiedBlock ? (
+                    <button onClick={pasteCopiedBlockToCurrentSection} disabled={isSaving}>
+                      Paste Copied Class
+                    </button>
+                  ) : null}
                 </div>
               )}
               {blockMenu && (
@@ -3406,7 +4527,13 @@ export default function App() {
                   <button onClick={() => enterEditMode(blockMenu.entry)} disabled={isSaving}>
                     Edit
                   </button>
-                  <button onClick={duplicateEntryToNextDay} disabled={isSaving}>
+                  <button onClick={copyBlock} disabled={isSaving}>
+                    Copy
+                  </button>
+                  <button
+                    onClick={() => duplicateEntryToNextDay(blockMenu.entry, blockMenu.day)}
+                    disabled={isSaving}
+                  >
                     Duplicate to Next Day
                   </button>
                   <button onClick={() => deleteEntry(blockMenu.entry)} disabled={isSaving}>
@@ -3438,6 +4565,16 @@ export default function App() {
             </div>
           )}
           <h3>{formEditId ? "Edit Class" : "Add Class"}</h3>
+          {activeCurriculumCourses.length > 0 ? (
+            <div className="form-note">
+              Curriculum: {curriculumTerm}
+              {formSectionYearLevel ? ` / ${formSectionYearLevel}` : ""}
+              {formSectionYearLevel && getYearLevelCurriculum(formSectionYearLevel)
+                ? ` / ${getYearLevelCurriculum(formSectionYearLevel)?.name}`
+                : ""} (
+              {getCurriculumCoursesForSection(scheduleForm.Section).length} courses)
+            </div>
+          ) : null}
           <label>
             Program
             <input
@@ -3466,20 +4603,62 @@ export default function App() {
               ))}
             </datalist>
           </label>
-          <label>
+          <label className="course-code-field">
             Course Code
             <input
               ref={courseCodeRef}
+              className={selectedCoursePlotStatus.isComplete ? "course-code-complete" : ""}
               value={scheduleForm["Course Code"]}
-              onChange={(event) => applyCourseCodeToScheduleForm(event.target.value)}
-              list="course-code-list"
+              onChange={(event) => {
+                applyCourseCodeToScheduleForm(event.target.value);
+                openCourseCodeMenu();
+              }}
+              onFocus={openCourseCodeMenu}
+              onClick={openCourseCodeMenu}
+              onBlur={() => window.setTimeout(() => setIsCourseCodeMenuOpen(false), 120)}
+              autoComplete="off"
             />
+            {scheduleForm["Course Code"] ? (
+              <div
+                className={`course-plot-status ${
+                  selectedCoursePlotStatus.isComplete ? "complete" : ""
+                }`}
+              >
+                {selectedCoursePlotStatus.requiredHours !== null
+                  ? `${formatHoursLabel(selectedCoursePlotStatus.plottedHours)} / ${formatHoursLabel(
+                      selectedCoursePlotStatus.requiredHours
+                    )} hrs plotted`
+                  : `${formatHoursLabel(selectedCoursePlotStatus.plottedHours)} hrs plotted`}
+              </div>
+            ) : null}
+            {isCourseCodeMenuOpen && visibleCourseCodeOptions.length > 0 ? (
+              <div className="course-code-menu-left" style={courseCodeMenuPosition}>
+                {visibleCourseCodeOptions.map((courseCode) => {
+                  const status = getCoursePlotStatus(courseCode, scheduleForm.Section, null);
+                  return (
+                    <button
+                      key={courseCode}
+                      type="button"
+                      className={status.isComplete ? "complete" : ""}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyCourseCodeToScheduleForm(courseCode);
+                        setIsCourseCodeMenuOpen(false);
+                      }}
+                    >
+                      <span>{courseCode}</span>
+                      <span>{getCourseCodeOptionLabel(courseCode)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <datalist id="course-code-list">
-              {courseDescriptionCatalog.courseCodes.map((courseCode) => (
+              {formCourseCodeOptions.map((courseCode) => (
                 <option
                   key={courseCode}
                   value={courseCode}
-                  label={getCanonicalCourseDescription(courseCode)}
+                  label={getCourseCodeOptionLabel(courseCode)}
                 />
               ))}
             </datalist>

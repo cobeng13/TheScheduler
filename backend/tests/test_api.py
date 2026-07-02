@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -36,3 +38,52 @@ def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
     assert client.get("/reports/timetable/section.csv").status_code == 200
+
+
+def test_update_and_delete_section():
+    suffix = uuid4().hex[:8]
+    create_response = client.post("/sections", json={"name": f"TEMP-A-{suffix}"})
+    assert create_response.status_code == 200
+    section_id = create_response.json()["id"]
+
+    update_response = client.put(f"/sections/{section_id}", json={"name": f"TEMP-B-{suffix}"})
+    assert update_response.status_code == 200
+    assert update_response.json()["name"] == f"TEMP-B-{suffix}"
+
+    delete_response = client.delete(f"/sections/{section_id}")
+    assert delete_response.status_code == 200
+
+
+def test_section_rename_updates_entries_and_delete_is_blocked_when_used():
+    suffix = uuid4().hex[:8]
+    section_name = f"TEMP-C-{suffix}"
+    renamed_section = f"TEMP-D-{suffix}"
+    create_section_response = client.post("/sections", json={"name": section_name})
+    assert create_section_response.status_code == 200
+    section_id = create_section_response.json()["id"]
+    payload = {
+        "Program": "BSCS",
+        "Section": section_name,
+        "Course Code": f"CS-{suffix}",
+        "Course Description": "Temporary Course",
+        "Units": 3,
+        "# of Hours": 3,
+        "Time (LPU Std)": "TBA",
+        "Time (24 Hrs)": "",
+        "Days": "TBA",
+        "Room": "TBA",
+        "Faculty": "TBA",
+    }
+    create_entry_response = client.post("/schedule", json=payload)
+    assert create_entry_response.status_code == 200
+    entry_id = create_entry_response.json()["id"]
+
+    update_response = client.put(f"/sections/{section_id}", json={"name": renamed_section})
+    assert update_response.status_code == 200
+    assert client.get(f"/schedule/{entry_id}").json()["Section"] == renamed_section
+
+    blocked_delete_response = client.delete(f"/sections/{section_id}")
+    assert blocked_delete_response.status_code == 409
+
+    assert client.delete(f"/schedule/{entry_id}").status_code == 200
+    assert client.delete(f"/sections/{section_id}").status_code == 200

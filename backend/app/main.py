@@ -192,6 +192,26 @@ def create_section(payload: schemas.NamedEntityCreate, db: Session = Depends(get
     return crud.create_named_entity(db, models.Section, payload.name)
 
 
+@app.put("/sections/{section_id}", response_model=schemas.NamedEntity)
+def update_section(
+    section_id: int, payload: schemas.NamedEntityCreate, db: Session = Depends(get_db)
+):
+    try:
+        return crud.update_named_entity(db, models.Section, section_id, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/sections/{section_id}")
+def delete_section(section_id: int, db: Session = Depends(get_db)):
+    try:
+        crud.delete_named_entity(db, models.Section, section_id)
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "Section has scheduled classes" else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @app.get("/faculty", response_model=List[schemas.NamedEntity])
 def list_faculty(db: Session = Depends(get_db)):
     return crud.list_named_entities(db, models.Faculty)
@@ -310,6 +330,9 @@ def import_database(file: UploadFile = File(...)):
     with temp_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     shutil.move(str(temp_path), target)
+    with SessionLocal() as db:
+        models.Base.metadata.create_all(bind=engine)
+        crud.remove_unused_placeholder_entities(db)
     return {"ok": True}
 
 
@@ -456,6 +479,7 @@ def import_csv(
 
     if not preview:
         db.commit()
+        crud.remove_unused_placeholder_entities(db)
 
     return {
         "rows_total": rows_total,

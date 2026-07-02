@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import conflicts, models, time_utils
+from app import crud
 
 
 def setup_db():
@@ -57,3 +58,39 @@ def test_conflict_detection_room_and_faculty():
     conflict_types = {(c["entry_id"], c["conflict_type"]) for c in conflicts_found}
     assert (entry_a.id, "room") in conflict_types
     assert (entry_a.id, "faculty") in conflict_types
+
+
+def test_remove_unused_placeholder_entities_when_real_data_exists():
+    db = setup_db()
+    db.add_all(
+        [
+            models.Section(name="No section yet"),
+            models.Section(name="BSN-1A"),
+            models.Faculty(name="No faculty yet"),
+            models.Faculty(name="Dr. Reyes"),
+            models.Room(name="No rooms yet"),
+            models.Room(name="R101"),
+            models.ScheduleEntry(
+                program="BSN",
+                section="BSN-1A",
+                course_code="NUR101",
+                course_description="Foundations",
+                units=3,
+                hours=3,
+                time_lpu="7:00 AM - 8:00 AM",
+                time_24="07:00-08:00",
+                days="Monday",
+                room="R101",
+                faculty="Dr. Reyes",
+                start_minutes=420,
+                end_minutes=480,
+            ),
+        ]
+    )
+    db.commit()
+
+    crud.remove_unused_placeholder_entities(db)
+
+    assert [section.name for section in db.query(models.Section).all()] == ["BSN-1A"]
+    assert [member.name for member in db.query(models.Faculty).all()] == ["Dr. Reyes"]
+    assert [room.name for room in db.query(models.Room).all()] == ["R101"]
