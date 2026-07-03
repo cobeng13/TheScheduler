@@ -82,6 +82,7 @@ type CourseDescriptionConflict = {
 };
 
 type ViewMode = "text" | "timetable-section" | "timetable-faculty" | "timetable-room";
+type EntityEditorKind = "section" | "faculty" | "room";
 
 type Selection = {
   day: string;
@@ -124,6 +125,7 @@ type ConflictIgnoreSettings = {
 };
 
 const API_BASE = "http://localhost:8000";
+const API_FALLBACK_BASE = "http://localhost:8001";
 const CUSTOMIZE_STORAGE_KEY = "scheduler.customize";
 const CURRICULUM_STORAGE_KEY = "scheduler.curriculum";
 const CURRICULUM_STATE_STORAGE_KEY = "scheduler.curriculum.state";
@@ -798,7 +800,7 @@ export default function App() {
   const [containsRoom, setContainsRoom] = useState(false);
   const [facultyInput, setFacultyInput] = useState("");
   const [roomInput, setRoomInput] = useState("");
-  const [openMenu, setOpenMenu] = useState<"file" | "export" | "rules" | null>(null);
+  const [openMenu, setOpenMenu] = useState<"file" | "edit" | "export" | "rules" | null>(null);
   const [showFacultyRules, setShowFacultyRules] = useState(false);
   const [showRoomRules, setShowRoomRules] = useState(false);
   const [csvImportState, setCsvImportState] = useState<{
@@ -837,9 +839,12 @@ export default function App() {
   const [sectionColorInput, setSectionColorInput] = useState("");
   const [sectionRgb, setSectionRgb] = useState({ r: 0, g: 0, b: 0 });
   const [showSectionAdvanced, setShowSectionAdvanced] = useState(false);
-  const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
-  const [sectionNameDrafts, setSectionNameDrafts] = useState<Record<number, string>>({});
-  const [sectionEditorError, setSectionEditorError] = useState("");
+  const [entityEditorKind, setEntityEditorKind] = useState<EntityEditorKind>("section");
+  const [isEntityEditorOpen, setIsEntityEditorOpen] = useState(false);
+  const [entityNameDrafts, setEntityNameDrafts] = useState<Record<number, string>>({});
+  const [newEntityName, setNewEntityName] = useState("");
+  const [forceEntityRemove, setForceEntityRemove] = useState(false);
+  const [entityEditorError, setEntityEditorError] = useState("");
   const [isCourseCodeMenuOpen, setIsCourseCodeMenuOpen] = useState(false);
   const [courseCodeMenuPosition, setCourseCodeMenuPosition] = useState({ top: 0, left: 0 });
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -1071,13 +1076,32 @@ export default function App() {
       fetch(`${API_BASE}/faculty`),
       fetch(`${API_BASE}/rooms`),
     ]);
-    setEntries(await scheduleRes.json());
-    setSections(await sectionsRes.json());
-    setFaculty(await facultyRes.json());
-    setRooms(await roomsRes.json());
+    const nextEntries = await scheduleRes.json();
+    const nextSections = await sectionsRes.json();
+    const nextFaculty = await facultyRes.json();
+    const nextRooms = await roomsRes.json();
+    setEntries(nextEntries);
+    setSections(nextSections);
+    setFaculty(nextFaculty);
+    setRooms(nextRooms);
+    setSelectedSection((prev) =>
+      prev && nextSections.some((section: NamedEntity) => section.name === prev) ? prev : ""
+    );
+    setSelectedFaculty((prev) =>
+      prev && nextFaculty.some((member: NamedEntity) => member.name === prev) ? prev : ""
+    );
+    setSelectedRoom((prev) =>
+      prev && nextRooms.some((room: NamedEntity) => room.name === prev) ? prev : ""
+    );
     await fetchConflicts(conflictSettings);
-    if (currentViewConfig.selected && viewMode.startsWith("timetable")) {
-      await fetchTimetableForSelection(currentViewConfig.selected, viewMode);
+    if (viewMode.startsWith("timetable")) {
+      const nextSelection =
+        viewMode === "timetable-section"
+          ? nextSections.find((section: NamedEntity) => section.name === selectedSection)?.name ?? ""
+          : viewMode === "timetable-faculty"
+            ? nextFaculty.find((member: NamedEntity) => member.name === selectedFaculty)?.name ?? ""
+            : nextRooms.find((room: NamedEntity) => room.name === selectedRoom)?.name ?? "";
+      await fetchTimetableForSelection(nextSelection, viewMode);
     }
   };
 
@@ -1281,6 +1305,37 @@ export default function App() {
     selectedFaculty,
     selectedRoom,
   ]);
+
+  const entityEditorConfig = useMemo(() => {
+    if (entityEditorKind === "faculty") {
+      return {
+        kind: "faculty" as const,
+        label: "Faculty",
+        pluralLabel: "faculty",
+        path: "faculty",
+        entities: facultyOptions,
+        field: "Faculty" as const,
+      };
+    }
+    if (entityEditorKind === "room") {
+      return {
+        kind: "room" as const,
+        label: "Room",
+        pluralLabel: "rooms",
+        path: "rooms",
+        entities: roomOptions,
+        field: "Room" as const,
+      };
+    }
+    return {
+      kind: "section" as const,
+      label: "Section",
+      pluralLabel: "sections",
+      path: "sections",
+      entities: sectionOptions,
+      field: "Section" as const,
+    };
+  }, [entityEditorKind, facultyOptions, roomOptions, sectionOptions]);
 
   const calculateCourseSectionTotalHours = (
     candidate: ScheduleEntry,
@@ -1775,10 +1830,14 @@ export default function App() {
       return;
     }
     if (currentViewConfig.entities.length === 0) {
+      currentViewConfig.setSelected("");
       setTimetableEntries([]);
       return;
     }
-    if (!currentViewConfig.selected) {
+    const selectedExists = currentViewConfig.entities.some(
+      (entity) => entity.name === currentViewConfig.selected
+    );
+    if (!selectedExists) {
       currentViewConfig.setSelected(currentViewConfig.entities[0].name);
     }
   }, [viewMode, currentViewConfig]);
@@ -2921,61 +2980,259 @@ export default function App() {
     });
   };
 
-  const openSectionEditor = () => {
-    setSectionNameDrafts(
-      Object.fromEntries(sections.map((section) => [section.id, section.name]))
-    );
-    setSectionEditorError("");
+  const openEntityEditor = (kind: EntityEditorKind) => {
+    const entities =
+      kind === "section" ? sectionOptions : kind === "faculty" ? facultyOptions : roomOptions;
+    setEntityEditorKind(kind);
+    setEntityNameDrafts(Object.fromEntries(entities.map((entity) => [entity.id, entity.name])));
+    setNewEntityName("");
+    setForceEntityRemove(false);
+    setEntityEditorError("");
     setOpenMenu(null);
-    setIsSectionEditorOpen(true);
+    setIsEntityEditorOpen(true);
   };
 
-  const handleRenameSection = async (section: NamedEntity) => {
-    const nextName = (sectionNameDrafts[section.id] ?? section.name).trim();
-    if (!nextName) {
-      setSectionEditorError("Section name cannot be blank.");
+  const applyEntityRenameLocally = (
+    kind: EntityEditorKind,
+    oldName: string,
+    nextName: string
+  ) => {
+    const oldKey = normalizeMatchValue(oldName);
+    const nextKey = normalizeMatchValue(nextName);
+    if (kind === "section") {
+      setSectionYearLevels((prev) => {
+        const next = { ...prev };
+        if (next[oldKey]) {
+          next[nextKey] = next[oldKey];
+          delete next[oldKey];
+        }
+        return next;
+      });
+      setScheduleForm((prev) =>
+        normalizeMatchValue(prev.Section) === oldKey ? { ...prev, Section: nextName } : prev
+      );
+      setSelectedSection((prev) => (normalizeMatchValue(prev) === oldKey ? nextName : prev));
+      setSelectedSectionColor((prev) =>
+        normalizeMatchValue(prev) === oldKey ? nextName : prev
+      );
+      setCustomizeSettings((prev) => {
+        const nextColors = { ...prev.sectionBgColors };
+        if (nextColors[oldName]) {
+          nextColors[nextName] = nextColors[oldName];
+          delete nextColors[oldName];
+        }
+        return { ...prev, sectionBgColors: nextColors };
+      });
       return;
     }
-    if (nextName === section.name) return;
-    const response = await fetch(`${API_BASE}/sections/${section.id}`, {
+    if (kind === "faculty") {
+      setScheduleForm((prev) =>
+        normalizeMatchValue(prev.Faculty) === oldKey ? { ...prev, Faculty: nextName } : prev
+      );
+      setSelectedFaculty((prev) => (normalizeMatchValue(prev) === oldKey ? nextName : prev));
+      setSelectedFacultyColor((prev) =>
+        normalizeMatchValue(prev) === oldKey ? nextName : prev
+      );
+      setCustomizeSettings((prev) => {
+        const nextColors = { ...prev.facultyColors };
+        if (nextColors[oldName]) {
+          nextColors[nextName] = nextColors[oldName];
+          delete nextColors[oldName];
+        }
+        return { ...prev, facultyColors: nextColors };
+      });
+      return;
+    }
+    setScheduleForm((prev) =>
+      normalizeMatchValue(prev.Room) === oldKey ? { ...prev, Room: nextName } : prev
+    );
+    setSelectedRoom((prev) => (normalizeMatchValue(prev) === oldKey ? nextName : prev));
+  };
+
+  const applyEntityRemovalLocally = (kind: EntityEditorKind, name: string) => {
+    const key = normalizeMatchValue(name);
+    if (kind === "section") {
+      setSectionYearLevels((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setSelectedSection((prev) => (normalizeMatchValue(prev) === key ? "" : prev));
+      setSelectedSectionColor((prev) => (normalizeMatchValue(prev) === key ? "" : prev));
+      setCustomizeSettings((prev) => {
+        const nextColors = { ...prev.sectionBgColors };
+        delete nextColors[name];
+        return { ...prev, sectionBgColors: nextColors };
+      });
+      return;
+    }
+    if (kind === "faculty") {
+      setSelectedFaculty((prev) => (normalizeMatchValue(prev) === key ? "" : prev));
+      setSelectedFacultyColor((prev) => (normalizeMatchValue(prev) === key ? "" : prev));
+      setCustomizeSettings((prev) => {
+        const nextColors = { ...prev.facultyColors };
+        delete nextColors[name];
+        return { ...prev, facultyColors: nextColors };
+      });
+      return;
+    }
+    setSelectedRoom((prev) => (normalizeMatchValue(prev) === key ? "" : prev));
+  };
+
+  const handleRenameEntity = async (entity: NamedEntity) => {
+    const nextName = (entityNameDrafts[entity.id] ?? entity.name).trim();
+    if (!nextName) {
+      setEntityEditorError(`${entityEditorConfig.label} name cannot be blank.`);
+      return;
+    }
+    if (nextName === entity.name) return;
+    const duplicate = entityEditorConfig.entities.find(
+      (item) =>
+        item.id !== entity.id && normalizeMatchValue(item.name) === normalizeMatchValue(nextName)
+    );
+    const canMerge =
+      Boolean(duplicate) &&
+      (entityEditorConfig.kind === "faculty" || entityEditorConfig.kind === "room");
+    if (duplicate && !canMerge) {
+      setEntityEditorError(`${entityEditorConfig.label} already exists.`);
+      return;
+    }
+    const shouldMerge =
+      canMerge &&
+      window.confirm(
+        `${entityEditorConfig.label} "${nextName}" already exists. Merge "${entity.name}" into "${duplicate?.name}"?`
+      );
+    if (canMerge && !shouldMerge) return;
+    const url = new URL(`${API_BASE}/${entityEditorConfig.path}/${entity.id}`);
+    if (shouldMerge) {
+      url.searchParams.set("merge", "true");
+    }
+    const response = await fetch(url.toString(), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: nextName }),
+      body: JSON.stringify({ name: duplicate?.name ?? nextName }),
     });
     if (!response.ok) {
-      setSectionEditorError("Could not rename section.");
+      const body = await response.json().catch(() => null);
+      setEntityEditorError(body?.detail ?? `Could not rename ${entityEditorConfig.label.toLowerCase()}.`);
       return;
     }
-    const oldKey = normalizeMatchValue(section.name);
-    const nextKey = normalizeMatchValue(nextName);
-    setSectionYearLevels((prev) => {
+    applyEntityRenameLocally(entityEditorConfig.kind, entity.name, duplicate?.name ?? nextName);
+    setEntityNameDrafts((prev) => {
       const next = { ...prev };
-      if (next[oldKey]) {
-        next[nextKey] = next[oldKey];
-        delete next[oldKey];
+      if (shouldMerge) {
+        delete next[entity.id];
+      } else {
+        next[entity.id] = nextName;
       }
       return next;
     });
-    setScheduleForm((prev) =>
-      normalizeMatchValue(prev.Section) === oldKey ? { ...prev, Section: nextName } : prev
-    );
-    setSectionNameDrafts((prev) => ({ ...prev, [section.id]: nextName }));
     await refreshAll();
   };
 
-  const handleDeleteSection = async (section: NamedEntity) => {
-    const response = await fetch(`${API_BASE}/sections/${section.id}`, { method: "DELETE" });
-    if (!response.ok) {
-      const body = await response.json().catch(() => null);
-      setSectionEditorError(body?.detail ?? "Could not delete section.");
+  const handleAddEntity = async () => {
+    const name = newEntityName.trim();
+    if (!name) {
+      setEntityEditorError(`${entityEditorConfig.label} name cannot be blank.`);
       return;
     }
-    const sectionKey = normalizeMatchValue(section.name);
-    setSectionYearLevels((prev) => {
+    setEntityEditorError("");
+    const response = await fetch(`${API_BASE}/${entityEditorConfig.path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      setEntityEditorError(body?.detail ?? `Could not add ${entityEditorConfig.label.toLowerCase()}.`);
+      return;
+    }
+    const created = (await response.json()) as NamedEntity;
+    setEntityNameDrafts((prev) => ({ ...prev, [created.id]: created.name }));
+    setNewEntityName("");
+    await refreshAll();
+  };
+
+  const deleteScheduleEntriesForEntity = async (entity: NamedEntity) => {
+    const params = new URLSearchParams();
+    if (entityEditorConfig.kind === "section") {
+      params.set("section", entity.name);
+    } else if (entityEditorConfig.kind === "faculty") {
+      params.set("faculty", entity.name);
+    } else {
+      params.set("room", entity.name);
+    }
+    const entriesResponse = await fetch(`${API_BASE}/schedule?${params.toString()}`);
+    if (!entriesResponse.ok) {
+      throw new Error("Could not load related classes.");
+    }
+    const relatedEntries = (await entriesResponse.json()) as ScheduleEntry[];
+    for (const entry of relatedEntries) {
+      const deleteResponse = await fetch(`${API_BASE}/schedule/${entry.id}`, {
+        method: "DELETE",
+      });
+      if (!deleteResponse.ok && deleteResponse.status !== 404) {
+        throw new Error("Could not remove every related class.");
+      }
+    }
+  };
+
+  const handleDeleteEntity = async (entity: NamedEntity) => {
+    setEntityEditorError("");
+    if (forceEntityRemove) {
+      try {
+        await deleteScheduleEntriesForEntity(entity);
+      } catch (error) {
+        setEntityEditorError(
+          error instanceof Error ? error.message : "Could not remove related classes."
+        );
+        return;
+      }
+    }
+    const removeEntity = async (base: string) => {
+      const removeUrl = new URL(`${base}/${entityEditorConfig.path}/${entity.id}/remove`);
+      if (forceEntityRemove) {
+        removeUrl.searchParams.set("force", "true");
+      }
+      const removeResponse = await fetch(removeUrl.toString(), { method: "POST" });
+      if (removeResponse.status !== 405) {
+        return removeResponse;
+      }
+      const deleteUrl = new URL(`${base}/${entityEditorConfig.path}/${entity.id}`);
+      if (forceEntityRemove) {
+        deleteUrl.searchParams.set("force", "true");
+      }
+      return fetch(deleteUrl.toString(), { method: "DELETE" });
+    };
+    let response = await removeEntity(API_BASE);
+    if (response.status === 405) {
+      try {
+        response = await removeEntity(API_FALLBACK_BASE);
+      } catch {
+        setEntityEditorError(
+          "The backend currently running does not support faculty/room removal. Restart the backend, then try again."
+        );
+        return;
+      }
+      if (response.status === 405) {
+        setEntityEditorError(
+          "The backend currently running does not support faculty/room removal. Restart the backend, then try again."
+        );
+        return;
+      }
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      setEntityEditorError(body?.detail ?? `Could not delete ${entityEditorConfig.label.toLowerCase()}.`);
+      return;
+    }
+    applyEntityRemovalLocally(entityEditorConfig.kind, entity.name);
+    setEntityNameDrafts((prev) => {
       const next = { ...prev };
-      delete next[sectionKey];
+      delete next[entity.id];
       return next;
     });
+    setEntityEditorError("");
     await refreshAll();
   };
 
@@ -3106,6 +3363,9 @@ export default function App() {
   const isTimetableView = viewMode.startsWith("timetable");
   const effectiveSelection =
     currentViewConfig.selected || currentViewConfig.entities[0]?.name || "";
+  const showStartPage =
+    entries.length === 0 &&
+    (sections.length === 0 || (isTimetableView && currentViewConfig.entities.length === 0));
   const canExportTimetable =
     isTimetableView && Boolean(effectiveSelection) && currentViewConfig.entities.length > 0;
   const currentSectionBg =
@@ -3318,9 +3578,38 @@ export default function App() {
               </button>
             </div>
             <div className="menu-group">
-              <button className="menu-button" type="button" onClick={openSectionEditor}>
-                Section Editor
+              <button
+                className={`menu-button ${openMenu === "edit" ? "active" : ""}`}
+                onClick={() => setOpenMenu((prev) => (prev === "edit" ? null : "edit"))}
+                type="button"
+              >
+                Edit ▼
               </button>
+              {openMenu === "edit" ? (
+                <div className="menu-dropdown" role="menu">
+                  <button
+                    className="menu-item"
+                    onClick={() => openEntityEditor("section")}
+                    type="button"
+                  >
+                    Edit Section
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => openEntityEditor("faculty")}
+                    type="button"
+                  >
+                    Edit Faculty
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => openEntityEditor("room")}
+                    type="button"
+                  >
+                    Edit Room
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="menu-group">
               <button
@@ -3712,21 +4001,21 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {isSectionEditorOpen ? (
+      {isEntityEditorOpen ? (
         <div className="modal-overlay">
           <div className="modal modal-wide">
             <div className="modal-header">
-              <h3>Section Editor</h3>
+              <h3>Edit {entityEditorConfig.label}</h3>
               <button
                 type="button"
                 className="modal-close"
-                onClick={() => setIsSectionEditorOpen(false)}
+                onClick={() => setIsEntityEditorOpen(false)}
               >
                 x
               </button>
             </div>
-            {curricula.length > 0 ? (
-              <div className="section-editor-panel">
+            {entityEditorConfig.kind === "section" && curricula.length > 0 ? (
+              <div className="entity-editor-panel">
                 <h4>Curricula</h4>
                 <div className="curriculum-editor-list">
                   {curricula.map((curriculum) => (
@@ -3768,52 +4057,82 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-            {sections.length === 0 ? (
-              <p>No sections yet.</p>
+            <label className="force-remove-option">
+              <input
+                type="checkbox"
+                checked={forceEntityRemove}
+                onChange={(event) => setForceEntityRemove(event.target.checked)}
+              />
+              Forcefully remove {entityEditorConfig.label.toLowerCase()} and related classes
+            </label>
+            <div className="entity-add-row">
+              <input
+                value={newEntityName}
+                onChange={(event) => setNewEntityName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    handleAddEntity();
+                  }
+                }}
+                placeholder={`New ${entityEditorConfig.label.toLowerCase()} name`}
+              />
+              <button type="button" onClick={handleAddEntity}>
+                Add
+              </button>
+            </div>
+            {entityEditorConfig.entities.length === 0 ? (
+              <p>No {entityEditorConfig.pluralLabel} yet.</p>
             ) : (
-              <div className="section-editor-list">
-                {sections.map((section) => (
-                  <div key={section.id} className="section-editor-row">
+              <div className="entity-editor-list">
+                {entityEditorConfig.entities.map((entity) => (
+                  <div
+                    key={entity.id}
+                    className={`entity-editor-row ${
+                      entityEditorConfig.kind === "section" ? "" : "simple"
+                    }`}
+                  >
                     <input
-                      value={sectionNameDrafts[section.id] ?? section.name}
+                      value={entityNameDrafts[entity.id] ?? entity.name}
                       onChange={(event) =>
-                        setSectionNameDrafts((prev) => ({
+                        setEntityNameDrafts((prev) => ({
                           ...prev,
-                          [section.id]: event.target.value,
+                          [entity.id]: event.target.value,
                         }))
                       }
                     />
-                    <select
-                      value={getSectionYearLevel(section.name)}
-                      onChange={(event) =>
-                        updateSectionYearLevel(section.name, event.target.value)
-                      }
-                      disabled={curriculumYearLevels.length === 0}
-                    >
-                      <option value="">All year levels</option>
-                      {curriculumYearLevels.map((yearLevel) => (
-                        <option key={yearLevel} value={yearLevel}>
-                          {yearLevel}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={() => handleRenameSection(section)}>
-                      Save
+                    {entityEditorConfig.kind === "section" ? (
+                      <select
+                        value={getSectionYearLevel(entity.name)}
+                        onChange={(event) =>
+                          updateSectionYearLevel(entity.name, event.target.value)
+                        }
+                        disabled={curriculumYearLevels.length === 0}
+                      >
+                        <option value="">All year levels</option>
+                        {curriculumYearLevels.map((yearLevel) => (
+                          <option key={yearLevel} value={yearLevel}>
+                            {yearLevel}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <button type="button" onClick={() => handleRenameEntity(entity)}>
+                      Rename
                     </button>
                     <button
                       type="button"
                       className="danger-button"
-                      onClick={() => handleDeleteSection(section)}
+                      onClick={() => handleDeleteEntity(entity)}
                     >
-                      Delete
+                      Remove
                     </button>
                   </div>
                 ))}
               </div>
             )}
-            {sectionEditorError ? <p className="error">{sectionEditorError}</p> : null}
+            {entityEditorError ? <p className="error">{entityEditorError}</p> : null}
             <div className="modal-actions">
-              <button type="button" onClick={() => setIsSectionEditorOpen(false)}>
+              <button type="button" onClick={() => setIsEntityEditorOpen(false)}>
                 Close
               </button>
             </div>
@@ -4159,26 +4478,60 @@ export default function App() {
 
       <div className="content">
         <div className="main">
-          <div className="controls">
-            <label>
-              Show Sunday
-              <input
-                type="checkbox"
-                checked={showSunday}
-                onChange={(event) => setShowSunday(event.target.checked)}
-              />
-            </label>
-            <label>
-              15-minute slots
-              <input
-                type="checkbox"
-                checked={useQuarterHours}
-                onChange={(event) => setUseQuarterHours(event.target.checked)}
-              />
-            </label>
-          </div>
+          {showStartPage ? (
+            <div className="start-page">
+              <div className="start-page-copy">
+                <h2>Start a timetable</h2>
+                <p>
+                  Open an existing timetable, import a CSV, or create the first section
+                  and add classes from the panel on the right.
+                </p>
+              </div>
+              <div className="start-actions">
+                <button type="button" onClick={() => setOpenMenu("file")}>
+                  Open File Menu
+                </button>
+                <button type="button" onClick={() => openEntityEditor("section")}>
+                  Create or Edit Sections
+                </button>
+              </div>
+              <div className="start-steps">
+                <div>
+                  <strong>1. Bring in data</strong>
+                  <span>Use File to open a saved timetable or import a schedule CSV.</span>
+                </div>
+                <div>
+                  <strong>2. Set up lists</strong>
+                  <span>Add sections, faculty, and rooms using the right-side form or Edit menu.</span>
+                </div>
+                <div>
+                  <strong>3. Add classes</strong>
+                  <span>Select a timetable cell or use the Add Class form.</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="controls">
+                <label>
+                  Show Sunday
+                  <input
+                    type="checkbox"
+                    checked={showSunday}
+                    onChange={(event) => setShowSunday(event.target.checked)}
+                  />
+                </label>
+                <label>
+                  15-minute slots
+                  <input
+                    type="checkbox"
+                    checked={useQuarterHours}
+                    onChange={(event) => setUseQuarterHours(event.target.checked)}
+                  />
+                </label>
+              </div>
 
-          {viewMode === "text" ? (
+              {viewMode === "text" ? (
             <div className="text-view">
               <div className="text-toolbar">
                 <input
@@ -4561,6 +4914,8 @@ export default function App() {
                 </div>
               )}
             </div>
+              )}
+            </>
           )}
         </div>
 

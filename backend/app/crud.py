@@ -138,35 +138,111 @@ def create_named_entity(db: Session, model_cls, name: str):
     return instance
 
 
+def _schedule_field_for_entity(model_cls):
+    if model_cls is models.Section:
+        return models.ScheduleEntry.section
+    if model_cls is models.Faculty:
+        return models.ScheduleEntry.faculty
+    if model_cls is models.Room:
+        return models.ScheduleEntry.room
+    raise ValueError("Unsupported entity type")
+
+
+def _has_merge_conflict(
+    entries: list[models.ScheduleEntry],
+    model_cls,
+    source_name: str,
+    target_name: str,
+) -> bool:
+    field_name = _schedule_field_for_entity(model_cls).key
+    simulated = []
+    for entry in entries:
+        simulated.append(
+            {
+                "id": entry.id,
+                "value": target_name if getattr(entry, field_name) == source_name else getattr(entry, field_name),
+                "start_minutes": entry.start_minutes,
+                "end_minutes": entry.end_minutes,
+                "days": time_utils.normalize_days(entry.days),
+            }
+        )
+    for index, left in enumerate(simulated):
+        if left["value"] != target_name:
+            continue
+        if left["start_minutes"] is None or left["end_minutes"] is None:
+            continue
+        for right in simulated[index + 1:]:
+            if right["value"] != target_name:
+                continue
+            if right["start_minutes"] is None or right["end_minutes"] is None:
+                continue
+            if not left["days"].intersection(right["days"]):
+                continue
+            if time_utils.overlap(
+                left["start_minutes"],
+                left["end_minutes"],
+                right["start_minutes"],
+                right["end_minutes"],
+            ):
+                return True
+    return False
+
+
 def update_named_entity(db: Session, model_cls, entity_id: int, name: str):
     instance = db.get(model_cls, entity_id)
     if instance is None:
         raise ValueError("Entity not found")
     old_name = instance.name
     instance.name = name
-    if model_cls is models.Section:
-        entries = db.scalars(
-            select(models.ScheduleEntry).where(models.ScheduleEntry.section == old_name)
-        )
-        for entry in entries:
-            entry.section = name
+    schedule_field = _schedule_field_for_entity(model_cls)
+    entries = db.scalars(select(models.ScheduleEntry).where(schedule_field == old_name))
+    for entry in entries:
+        setattr(entry, schedule_field.key, name)
     db.commit()
     db.refresh(instance)
     return instance
 
 
-def delete_named_entity(db: Session, model_cls, entity_id: int) -> None:
+def merge_named_entity(db: Session, model_cls, source_id: int, target_name: str):
+    if model_cls not in {models.Faculty, models.Room}:
+        raise ValueError("Merge is only available for faculty and rooms")
+    source = db.get(model_cls, source_id)
+    if source is None:
+        raise ValueError("Entity not found")
+    target = db.scalar(
+        select(model_cls).where(func.lower(model_cls.name) == target_name.strip().lower())
+    )
+    if target is None:
+        raise ValueError("Merge target not found")
+    if target.id == source.id:
+        return source
+
+    entries = list(db.scalars(select(models.ScheduleEntry)))
+    if _has_merge_conflict(entries, model_cls, source.name, target.name):
+        raise ValueError(f"Merging would create {model_cls.__name__.lower()} conflicts")
+
+    schedule_field = _schedule_field_for_entity(model_cls)
+    for entry in entries:
+        if getattr(entry, schedule_field.key) == source.name:
+            setattr(entry, schedule_field.key, target.name)
+    db.delete(source)
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+def delete_named_entity(db: Session, model_cls, entity_id: int, force: bool = False) -> None:
     instance = db.get(model_cls, entity_id)
     if instance is None:
         raise ValueError("Entity not found")
-    if model_cls is models.Section:
-        has_entries = db.scalar(
-            select(models.ScheduleEntry.id)
-            .where(models.ScheduleEntry.section == instance.name)
-            .limit(1)
-        )
-        if has_entries is not None:
-            raise ValueError("Section has scheduled classes")
+    schedule_field = _schedule_field_for_entity(model_cls)
+    matching_entries = list(
+        db.scalars(select(models.ScheduleEntry).where(schedule_field == instance.name))
+    )
+    if matching_entries and not force:
+        raise ValueError(f"{model_cls.__name__} has scheduled classes")
+    for entry in matching_entries:
+        db.delete(entry)
     db.delete(instance)
     db.commit()
 

@@ -204,13 +204,18 @@ def update_section(
 
 
 @app.delete("/sections/{section_id}")
-def delete_section(section_id: int, db: Session = Depends(get_db)):
+def delete_section(section_id: int, force: bool = False, db: Session = Depends(get_db)):
     try:
-        crud.delete_named_entity(db, models.Section, section_id)
+        crud.delete_named_entity(db, models.Section, section_id, force=force)
     except ValueError as exc:
         status_code = 409 if str(exc) == "Section has scheduled classes" else 404
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@app.post("/sections/{section_id}/remove")
+def remove_section(section_id: int, force: bool = False, db: Session = Depends(get_db)):
+    return delete_section(section_id, force=force, db=db)
 
 
 @app.get("/faculty", response_model=List[schemas.NamedEntity])
@@ -223,6 +228,37 @@ def create_faculty(payload: schemas.NamedEntityCreate, db: Session = Depends(get
     return crud.create_named_entity(db, models.Faculty, payload.name)
 
 
+@app.put("/faculty/{faculty_id}", response_model=schemas.NamedEntity)
+def update_faculty(
+    faculty_id: int,
+    payload: schemas.NamedEntityCreate,
+    merge: bool = False,
+    db: Session = Depends(get_db),
+):
+    try:
+        if merge:
+            return crud.merge_named_entity(db, models.Faculty, faculty_id, payload.name)
+        return crud.update_named_entity(db, models.Faculty, faculty_id, payload.name)
+    except ValueError as exc:
+        status_code = 409 if "conflicts" in str(exc) else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.delete("/faculty/{faculty_id}")
+def delete_faculty(faculty_id: int, force: bool = False, db: Session = Depends(get_db)):
+    try:
+        crud.delete_named_entity(db, models.Faculty, faculty_id, force=force)
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "Faculty has scheduled classes" else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/faculty/{faculty_id}/remove")
+def remove_faculty(faculty_id: int, force: bool = False, db: Session = Depends(get_db)):
+    return delete_faculty(faculty_id, force=force, db=db)
+
+
 @app.get("/rooms", response_model=List[schemas.NamedEntity])
 def list_rooms(db: Session = Depends(get_db)):
     return crud.list_named_entities(db, models.Room)
@@ -231,6 +267,37 @@ def list_rooms(db: Session = Depends(get_db)):
 @app.post("/rooms", response_model=schemas.NamedEntity)
 def create_room(payload: schemas.NamedEntityCreate, db: Session = Depends(get_db)):
     return crud.create_named_entity(db, models.Room, payload.name)
+
+
+@app.put("/rooms/{room_id}", response_model=schemas.NamedEntity)
+def update_room(
+    room_id: int,
+    payload: schemas.NamedEntityCreate,
+    merge: bool = False,
+    db: Session = Depends(get_db),
+):
+    try:
+        if merge:
+            return crud.merge_named_entity(db, models.Room, room_id, payload.name)
+        return crud.update_named_entity(db, models.Room, room_id, payload.name)
+    except ValueError as exc:
+        status_code = 409 if "conflicts" in str(exc) else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.delete("/rooms/{room_id}")
+def delete_room(room_id: int, force: bool = False, db: Session = Depends(get_db)):
+    try:
+        crud.delete_named_entity(db, models.Room, room_id, force=force)
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "Room has scheduled classes" else 404
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/rooms/{room_id}/remove")
+def remove_room(room_id: int, force: bool = False, db: Session = Depends(get_db)):
+    return delete_room(room_id, force=force, db=db)
 
 
 @app.get("/conflicts", response_model=schemas.ConflictReport)
