@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import models, time_utils
+from . import conflicts, models, time_utils
 from .schemas import ScheduleEntryCreate, ScheduleEntryUpdate
 
 
@@ -43,6 +45,7 @@ def create_schedule_entry(db: Session, entry: ScheduleEntryCreate) -> models.Sch
         start_minutes=start_minutes,
         end_minutes=end_minutes,
     )
+    _raise_for_section_conflict(db, 0, model)
     db.add(model)
     db.commit()
     db.refresh(model)
@@ -81,9 +84,34 @@ def update_schedule_entry(
     model.faculty = entry.faculty
     model.start_minutes = start_minutes
     model.end_minutes = end_minutes
+    _raise_for_section_conflict(db, entry_id, model)
     db.commit()
     db.refresh(model)
     return model
+
+
+def _raise_for_section_conflict(
+    db: Session, entry_id: int, candidate: models.ScheduleEntry
+) -> None:
+    section_conflicts = [
+        conflict
+        for conflict in conflicts.conflicts_for_candidate(
+            db,
+            entry_id,
+            SimpleNamespace(
+                section=candidate.section,
+                time_lpu=candidate.time_lpu,
+                days=candidate.days,
+                start_minutes=candidate.start_minutes,
+                end_minutes=candidate.end_minutes,
+                room=candidate.room,
+                faculty=candidate.faculty,
+            ),
+        )
+        if conflict["conflict_type"] == "section"
+    ]
+    if section_conflicts:
+        raise ValueError("Section has another class at the same time")
 
 
 def delete_schedule_entry(db: Session, entry_id: int) -> None:

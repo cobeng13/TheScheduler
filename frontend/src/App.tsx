@@ -27,7 +27,7 @@ type ConflictSummary = {
 type ConflictReport = { conflicts: ConflictSummary[] };
 
 type MoveConflictDetail = {
-  conflict_type: "room" | "faculty";
+  conflict_type: "section" | "room" | "faculty";
   entry: ScheduleEntry;
 };
 
@@ -1920,8 +1920,13 @@ export default function App() {
   ) => {
     const details = conflictsList.map((conflict) => {
       const entry = conflict.entry;
-      const typeLabel = conflict.conflict_type === "room" ? "ROOM" : "FACULTY";
-      const owner = conflict.conflict_type === "room" ? entry.Room : entry.Faculty;
+      const typeLabel = conflict.conflict_type.toUpperCase();
+      const owner =
+        conflict.conflict_type === "section"
+          ? entry.Section
+          : conflict.conflict_type === "room"
+            ? entry.Room
+            : entry.Faculty;
       const timeLabel =
         entry["Time (LPU Std)"] && entry["Time (LPU Std)"].toLowerCase() !== "tba"
           ? entry["Time (LPU Std)"].replace("-", "–")

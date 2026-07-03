@@ -148,6 +148,7 @@ def move_check(
         days=normalized_days,
         start_minutes=start_minutes,
         end_minutes=end_minutes,
+        section=entry.section,
         room=entry.room,
         faculty=entry.faculty,
     )

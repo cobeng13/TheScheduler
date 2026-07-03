@@ -60,6 +60,47 @@ def test_conflict_detection_room_and_faculty():
     assert (entry_a.id, "faculty") in conflict_types
 
 
+def test_conflict_detection_same_section_different_room_and_faculty():
+    db = setup_db()
+    entry_a = models.ScheduleEntry(
+        program="BSPharm",
+        section="BS Pharm 1A",
+        course_code="A",
+        course_description="Course A",
+        units=3,
+        hours=3,
+        time_lpu="7:00a-10:00a",
+        time_24="07:00-10:00",
+        days="M",
+        room="Room A",
+        faculty="Faculty A",
+        start_minutes=420,
+        end_minutes=600,
+    )
+    entry_b = models.ScheduleEntry(
+        program="BSPharm",
+        section="BS Pharm 1A",
+        course_code="B",
+        course_description="Course B",
+        units=3,
+        hours=3,
+        time_lpu="7:00a-10:00a",
+        time_24="07:00-10:00",
+        days="M",
+        room="Room B",
+        faculty="Faculty B",
+        start_minutes=420,
+        end_minutes=600,
+    )
+    db.add_all([entry_a, entry_b])
+    db.commit()
+
+    conflicts_found = conflicts.find_conflicts(db)
+    conflict_types = {(c["entry_id"], c["conflict_type"]) for c in conflicts_found}
+    assert (entry_a.id, "section") in conflict_types
+    assert (entry_b.id, "section") in conflict_types
+
+
 def test_remove_unused_placeholder_entities_when_real_data_exists():
     db = setup_db()
     db.add_all(

@@ -58,6 +58,12 @@ def find_conflicts(
                 continue
             if not entry_days.intersection(normalize_days(other.days)):
                 continue
+            if entry.section == other.section:
+                conflicts.append({
+                    "entry_id": entry.id,
+                    "conflicts_with": other.id,
+                    "conflict_type": "section",
+                })
             if not ignore_room:
                 if _matches_ignore(entry.room, ignore_room_list, contains_room) or _matches_ignore(
                     other.room, ignore_room_list, contains_room
@@ -120,6 +126,8 @@ def conflicts_for_candidate(
             continue
         if not candidate_days.intersection(normalize_days(other.days)):
             continue
+        if candidate.section == other.section:
+            conflicts.append({"conflict_type": "section", "entry": other})
         if not ignore_room:
             if _matches_ignore(candidate.room, ignore_room_list, contains_room) or _matches_ignore(
                 other.room, ignore_room_list, contains_room

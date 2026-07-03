@@ -34,6 +34,46 @@ def test_create_and_delete_schedule_entry():
     assert delete_response.status_code == 200
 
 
+def test_same_section_overlap_is_rejected_on_create_and_move_check():
+    suffix = uuid4().hex[:8]
+    section = f"BUG-SECTION-{suffix}"
+    first_payload = {
+        "Program": "BSPharm",
+        "Section": section,
+        "Course Code": f"A-{suffix}",
+        "Course Description": "Course A",
+        "Units": 3,
+        "# of Hours": 3,
+        "Time (LPU Std)": "7:00a-10:00a",
+        "Time (24 Hrs)": "07:00-10:00",
+        "Days": "M",
+        "Room": f"Room A {suffix}",
+        "Faculty": f"Faculty A {suffix}",
+    }
+    second_payload = {
+        **first_payload,
+        "Course Code": f"B-{suffix}",
+        "Course Description": "Course B",
+        "Room": f"Room B {suffix}",
+        "Faculty": f"Faculty B {suffix}",
+    }
+    create_response = client.post("/schedule", json=first_payload)
+    assert create_response.status_code == 200
+    entry_id = create_response.json()["id"]
+
+    move_check_response = client.post("/schedule/0/move-check", json=second_payload)
+    assert move_check_response.status_code == 200
+    move_check_body = move_check_response.json()
+    assert move_check_body["ok"] is False
+    assert move_check_body["conflicts"][0]["conflict_type"] == "section"
+
+    blocked_create_response = client.post("/schedule", json=second_payload)
+    assert blocked_create_response.status_code == 422
+    assert blocked_create_response.json()["detail"] == "Section has another class at the same time"
+
+    assert client.delete(f"/schedule/{entry_id}").status_code == 200
+
+
 def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
