@@ -1602,13 +1602,17 @@ export default function App() {
     };
   };
 
-  const updateMatchingCourseDescriptions = async (source: ScheduleEntry) => {
+  const updateMatchingCourseDescriptions = async (
+    source: ScheduleEntry,
+    sourceId: number | null
+  ) => {
     const codeKey = normalizeMatchValue(source["Course Code"]);
     const description = source["Course Description"].trim();
     if (!codeKey || !description) return;
     const updates = entries
       .filter(
         (entry) =>
+          entry.id !== sourceId &&
           normalizeMatchValue(entry["Course Code"]) === codeKey &&
           isSameCurriculumScope(entry.Section, source.Section) &&
           entry["Course Description"].trim() !== description
@@ -2226,7 +2230,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
-      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id }, created.id);
       await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
@@ -2277,7 +2281,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
-      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id }, created.id);
       await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
@@ -2357,7 +2361,7 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    await updateMatchingCourseDescriptions(payload);
+    await updateMatchingCourseDescriptions(payload, formEditId);
     await updateMatchingCourseSectionHours(payload, formEditId);
     if (
       previousEntry &&
@@ -2592,7 +2596,7 @@ export default function App() {
     });
     const created = await createResponse.json();
     if (created?.id) {
-      await updateMatchingCourseDescriptions({ ...payload, id: created.id });
+      await updateMatchingCourseDescriptions({ ...payload, id: created.id }, created.id);
       await updateMatchingCourseSectionHours({ ...payload, id: created.id }, created.id);
       pushUndoAction({
         type: "add",
@@ -2637,6 +2641,7 @@ export default function App() {
 
   const handleSaveEdit = async () => {
     if (!editEntry || editEntryId === null) return;
+    if (isSaving) return;
     const previousEntry = entries.find((item) => item.id === editEntryId);
     const timeValue = editEntry["Time (LPU Std)"].trim();
     const daysValue = editEntry.Days.trim();
@@ -2666,6 +2671,7 @@ export default function App() {
       }),
       editEntryId
     );
+    setIsSaving(true);
     await ensureEntityExists("sections", payload.Section, sections);
     await ensureEntityExists("faculty", payload.Faculty, faculty);
     await ensureEntityExists("rooms", payload.Room, rooms);
@@ -2675,14 +2681,21 @@ export default function App() {
     );
     if (!editCheck.ok && editCheck.reason === "conflict" && editCheck.conflicts?.length) {
       setEditError(buildConflictMessage(editCheck.conflicts));
+      setIsSaving(false);
       return;
     }
-    await fetch(`${API_BASE}/schedule/${editEntryId}`, {
+    const updateResponse = await fetch(`${API_BASE}/schedule/${editEntryId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    await updateMatchingCourseDescriptions(payload);
+    if (!updateResponse.ok) {
+      const body = await updateResponse.json().catch(() => null);
+      setEditError(body?.detail ?? "Could not save changes.");
+      setIsSaving(false);
+      return;
+    }
+    await updateMatchingCourseDescriptions(payload, editEntryId);
     await updateMatchingCourseSectionHours(payload, editEntryId);
     if (
       previousEntry &&
@@ -2701,7 +2714,8 @@ export default function App() {
         label: `Edit Class: ${previousEntry["Course Code"]}`,
       });
     }
-    refreshAll();
+    await refreshAll();
+    setIsSaving(false);
   };
 
   const handleDeleteEntry = async (entryId: number) => {
