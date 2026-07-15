@@ -791,6 +791,8 @@ export default function App() {
   } | null>(null);
   const [exportCancelRequested, setExportCancelRequested] = useState(false);
   const [openExportSubmenu, setOpenExportSubmenu] = useState(false);
+  const [isFacultyLoadExportOpen, setIsFacultyLoadExportOpen] = useState(false);
+  const [facultyLoadExportNames, setFacultyLoadExportNames] = useState<string[]>([]);
   const [ignoreFaculty, setIgnoreFaculty] = useState(false);
   const [ignoreRoom, setIgnoreRoom] = useState(false);
   const [ignoreTba, setIgnoreTba] = useState(false);
@@ -1084,23 +1086,29 @@ export default function App() {
     setSections(nextSections);
     setFaculty(nextFaculty);
     setRooms(nextRooms);
-    setSelectedSection((prev) =>
-      prev && nextSections.some((section: NamedEntity) => section.name === prev) ? prev : ""
-    );
-    setSelectedFaculty((prev) =>
-      prev && nextFaculty.some((member: NamedEntity) => member.name === prev) ? prev : ""
-    );
-    setSelectedRoom((prev) =>
-      prev && nextRooms.some((room: NamedEntity) => room.name === prev) ? prev : ""
-    );
+    const nextSection =
+      nextSections.find((section: NamedEntity) => section.name === selectedSection)?.name ??
+      nextSections[0]?.name ??
+      "";
+    const nextFacultyMember =
+      nextFaculty.find((member: NamedEntity) => member.name === selectedFaculty)?.name ??
+      nextFaculty[0]?.name ??
+      "";
+    const nextRoom =
+      nextRooms.find((room: NamedEntity) => room.name === selectedRoom)?.name ??
+      nextRooms[0]?.name ??
+      "";
+    setSelectedSection(nextSection);
+    setSelectedFaculty(nextFacultyMember);
+    setSelectedRoom(nextRoom);
     await fetchConflicts(conflictSettings);
     if (viewMode.startsWith("timetable")) {
       const nextSelection =
         viewMode === "timetable-section"
-          ? nextSections.find((section: NamedEntity) => section.name === selectedSection)?.name ?? ""
+          ? nextSection
           : viewMode === "timetable-faculty"
-            ? nextFaculty.find((member: NamedEntity) => member.name === selectedFaculty)?.name ?? ""
-            : nextRooms.find((room: NamedEntity) => room.name === selectedRoom)?.name ?? "";
+            ? nextFacultyMember
+            : nextRoom;
       await fetchTimetableForSelection(nextSelection, viewMode);
     }
   };
@@ -3340,6 +3348,65 @@ export default function App() {
     downloadBlob(blob, filename);
   };
 
+  const exportFacultyLoad = (facultyNames: string[]) => {
+    const escapeHtml = (value: unknown) =>
+      String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    const formatLoadNumber = (value: number) => {
+      const rounded = roundHours(value);
+      return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "");
+    };
+    const reportSections = facultyNames.map((facultyName) => {
+      const facultyEntries = entries
+        .filter((entry) => normalizeMatchValue(entry.Faculty) === normalizeMatchValue(facultyName))
+        .sort((left, right) =>
+          [left["Course Code"], left.Section, left.Days, left["Time (24 Hrs)"] ?? ""].join("|").localeCompare(
+            [right["Course Code"], right.Section, right.Days, right["Time (24 Hrs)"] ?? ""].join("|"),
+            undefined,
+            { sensitivity: "base", numeric: true }
+          )
+        );
+      const countedAssignments = new Set<string>();
+      let lectureHours = 0;
+      let laboratoryHours = 0;
+      let lectureUnits = 0;
+      let laboratoryUnits = 0;
+      const rows = facultyEntries.map((entry) => {
+        const curriculumCourse = getCurriculumCourse(entry["Course Code"], entry.Section);
+        const isLaboratory = curriculumCourse
+          ? curriculumCourse.labUnits > 0
+          : /\blab(?:oratory)?\b/i.test(`${entry["Course Code"]} ${entry["Course Description"]}`);
+        const kind = isLaboratory ? "LAB" : "LEC";
+        const hours = getEntryWeeklyHours(entry);
+        const units = curriculumCourse?.totalUnits ?? entry.Units;
+        const assignmentKey = `${normalizeMatchValue(entry.Section)}|${normalizeMatchValue(entry["Course Code"])}`;
+        const isFirstAssignmentRow = !countedAssignments.has(assignmentKey);
+        if (isFirstAssignmentRow) {
+          countedAssignments.add(assignmentKey);
+          if (isLaboratory) laboratoryUnits += units;
+          else lectureUnits += units;
+        }
+        if (isLaboratory) laboratoryHours += hours;
+        else lectureHours += hours;
+        return `<tr><td>${escapeHtml(entry["Course Code"])}</td><td>${escapeHtml(entry.Section)}</td><td>${escapeHtml(entry.Days)} ${escapeHtml(entry["Time (LPU Std)"])}</td><td>${escapeHtml(entry.Room)}</td><td class="number">${formatLoadNumber(hours)}</td><td class="number">${isFirstAssignmentRow ? formatLoadNumber(units) : "&mdash;"}</td><td>${kind}</td></tr>`;
+      });
+      const totalHours = lectureHours + laboratoryHours;
+      const totalUnits = lectureUnits + laboratoryUnits;
+      const bodyRows = rows.length ? rows.join("") : '<tr><td colspan="7" class="empty">No scheduled classes.</td></tr>';
+      return `<section class="faculty-report"><h1>Faculty Load</h1><div class="summary"><div class="faculty"><strong>Faculty Name:</strong> ${escapeHtml(facultyName)}</div><div><strong>Total Number of Hours:</strong> ${formatLoadNumber(totalHours)}</div><div><strong>Total Number of Units:</strong> ${formatLoadNumber(totalUnits)}</div><div><strong>Hours Lecture:</strong> ${formatLoadNumber(lectureHours)}</div><div><strong>Units Lecture:</strong> ${formatLoadNumber(lectureUnits)}</div><div><strong>Hours Laboratory:</strong> ${formatLoadNumber(laboratoryHours)}</div><div><strong>Units Laboratory:</strong> ${formatLoadNumber(laboratoryUnits)}</div></div><table><thead><tr><th>Course Code</th><th>Section</th><th>Time</th><th>Room</th><th>Number of Hours</th><th># of Units</th><th>LEC/LAB</th></tr></thead><tbody>${bodyRows}</tbody></table></section>`;
+    });
+    const report = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Faculty Loads</title><style>@page{size:A4;margin:18mm}*{box-sizing:border-box}body{margin:0;color:#111;font-family:Arial,sans-serif;font-size:11pt}.faculty-report{break-after:page}.faculty-report:last-child{break-after:auto}h1{margin:0 0 20px;text-align:center;font-size:18pt}.summary{margin-bottom:20px;line-height:1.6}.faculty{font-size:13pt}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:7px 8px;text-align:left;vertical-align:top}th{background:#e9eef5;font-weight:700}.number{text-align:right}.empty{padding:22px;text-align:center;color:#555}@media print{h1,.summary,thead{break-after:avoid}tr{break-inside:avoid}}</style></head><body>${reportSections.join("")}</body></html>`;
+    const filename = facultyNames.length === 1
+      ? `faculty-load-${facultyNames[0].replace(/[^a-z0-9_-]+/gi, "_")}.html`
+      : "faculty-loads.html";
+    downloadBlob(new Blob([report], { type: "text/html;charset=utf-8" }), filename);
+    setIsFacultyLoadExportOpen(false);
+  };
+
   const filteredEntries = useMemo(() => {
     const filtered = entries.filter((entry) =>
       canonicalHeaders.some((header) =>
@@ -3642,6 +3709,22 @@ export default function App() {
                   >
                     Export Timetable (Current View)
                   </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      setFacultyLoadExportNames(
+                        viewMode === "timetable-faculty" && effectiveSelection
+                          ? [effectiveSelection]
+                          : []
+                      );
+                      setIsFacultyLoadExportOpen(true);
+                      setOpenMenu(null);
+                    }}
+                    disabled={facultyOptions.length === 0}
+                    type="button"
+                  >
+                    Export Faculty Load
+                  </button>
                   <div className="menu-divider" />
                   <button
                     className="menu-item submenu-trigger"
@@ -3901,6 +3984,53 @@ export default function App() {
           <button className="nav-button" onClick={handleCancelExport}>
             Cancel
           </button>
+        </div>
+      ) : null}
+      {isFacultyLoadExportOpen ? (
+        <div className="modal-overlay">
+          <div className="modal">
+            <h3>Export Faculty Load</h3>
+            <label className="menu-checkbox">
+              <input
+                type="checkbox"
+                checked={facultyLoadExportNames.length === facultyOptions.length}
+                onChange={(event) =>
+                  setFacultyLoadExportNames(
+                    event.target.checked ? facultyOptions.map((member) => member.name) : []
+                  )
+                }
+              />
+              Select All Faculty
+            </label>
+            <div className="faculty-export-list">
+              {facultyOptions.map((member) => (
+                <label key={member.id} className="menu-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={facultyLoadExportNames.includes(member.name)}
+                    onChange={(event) =>
+                      setFacultyLoadExportNames((current) =>
+                        event.target.checked
+                          ? [...current, member.name]
+                          : current.filter((name) => name !== member.name)
+                      )
+                    }
+                  />
+                  {member.name}
+                </label>
+              ))}
+            </div>
+            <div className="modal-note">
+              Units come from the loaded curriculum. Split schedule rows for the same course and
+              section count their units once; their scheduled hours are added together.
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setIsFacultyLoadExportOpen(false)}>Cancel</button>
+              <button type="button" disabled={facultyLoadExportNames.length === 0} onClick={() => exportFacultyLoad(facultyLoadExportNames)}>
+                Export Selected ({facultyLoadExportNames.length})
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {curriculumPreview ? (

@@ -391,6 +391,25 @@ def export_timetable_csv(group: str, filter_value: str | None = None, db: Sessio
     return Response(content, media_type="text/csv")
 
 
+@app.get("/reports/faculty-load.html")
+def export_faculty_load(faculty: str, db: Session = Depends(get_db)):
+    faculty_name = faculty.strip()
+    if not faculty_name:
+        raise HTTPException(status_code=400, detail="Faculty is required")
+    entries = [
+        schemas.ScheduleEntry.from_orm(entry).model_dump(by_alias=True)
+        for entry in crud.list_schedule_entries(db)
+        if entry.faculty == faculty_name
+    ]
+    content = reports.build_faculty_load_html(faculty_name, entries)
+    safe_name = "".join(char if char.isalnum() or char in "-_" else "_" for char in faculty_name)
+    return Response(
+        content,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="faculty-load-{safe_name}.html"'},
+    )
+
+
 @app.post("/file/import")
 def import_database(file: UploadFile = File(...)):
     target = DATABASE_PATH

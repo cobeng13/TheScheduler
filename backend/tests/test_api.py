@@ -78,6 +78,47 @@ def test_reports_and_conflicts_endpoints():
     assert client.get("/conflicts").status_code == 200
     assert client.get("/reports/text.csv").status_code == 200
     assert client.get("/reports/timetable/section.csv").status_code == 200
+    response = client.get("/reports/faculty-load.html", params={"faculty": "Dr. Ada"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Faculty Load" in response.text
+
+
+def test_faculty_load_report_totals_lecture_and_lab():
+    from app import reports
+
+    entries = [
+        {
+            "Course Code": "PHAR101 LEC",
+            "Course Description": "Pharmacy Lecture",
+            "Section": "A",
+            "Room": "Room 101",
+            "Units": 3,
+            "Time (LPU Std)": "8:00a-9:30a",
+            "Time (24 Hrs)": "08:00-09:30",
+            "Days": "M,W",
+        },
+        {
+            "Course Code": "PHAR101 LAB",
+            "Course Description": "Pharmacy Laboratory",
+            "Section": "A",
+            "Room": "Laboratory 2",
+            "Units": 1,
+            "Time (LPU Std)": "1:00p-4:00p",
+            "Time (24 Hrs)": "13:00-16:00",
+            "Days": "F",
+        },
+    ]
+    report = reports.build_faculty_load_html("Dr. Test", entries).decode("utf-8")
+    assert "Total Number of Hours:</strong> 6" in report
+    assert "Hours Lecture:</strong> 3" in report
+    assert "Units Lecture:</strong> 3" in report
+    assert "Hours Laboratory:</strong> 3" in report
+    assert "Units Laboratory:</strong> 1" in report
+    assert "Total Number of Units:</strong> 4" in report
+    assert "PHAR101 LAB" in report
+    assert "<th>Number of Hours</th><th># of Units</th><th>LEC/LAB</th>" in report
+    assert "Laboratory 2" in report
 
 
 def test_update_and_delete_section():

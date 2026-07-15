@@ -300,6 +300,17 @@ body {
   border-radius: 4px;
 }
 
+.faculty-export-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #dce4ef;
+  border-radius: 4px;
+}
+
 .modal-note,
 .form-note {
   color: #526176;
