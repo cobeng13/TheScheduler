@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import conflicts, crud, models, reports, schemas, time_utils
+from . import conflicts, crud, models, reports, schemas, time_utils, moves
 from .db import DATABASE_PATH, SessionLocal, engine
 
 mimetypes.add_type("text/javascript", ".js")
@@ -114,6 +114,16 @@ def delete_schedule(entry_id: int, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@app.post("/schedule/{entry_id}/move", response_model=schemas.MeetingMoveResult)
+def move_meeting(entry_id: int, request: schemas.MeetingMove, db: Session = Depends(get_db)):
+    return moves.move(db, entry_id, request)
+
+
+@app.post("/schedule/{entry_id}/move/revert")
+def revert_meeting(entry_id: int, request: schemas.MeetingMoveSnapshot, db: Session = Depends(get_db)):
+    return moves.revert(db, entry_id, request)
 
 
 @app.post("/schedule/{entry_id}/move-check")
