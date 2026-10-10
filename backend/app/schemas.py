@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Literal, Tuple
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field
 
 
 CANONICAL_HEADERS = [
@@ -51,45 +51,6 @@ class ScheduleEntry(ScheduleEntryBase):
     class Config:
         from_attributes = True
         populate_by_name = True
-
-
-class MoveAssignment(BaseModel):
-    kind: Literal["section", "faculty", "room"]
-    name: str
-
-
-class MoveConflictSettings(BaseModel):
-    ignore_faculty: bool = False
-    ignore_room: bool = False
-    ignore_tba: bool = False
-    ignore_faculty_list: List[str] = Field(default_factory=list)
-    ignore_room_list: List[str] = Field(default_factory=list)
-    contains_faculty: bool = False
-    contains_room: bool = False
-
-
-class MeetingMove(BaseModel):
-    source_day: str
-    destination_day: str
-    start_minutes: int
-    assignment: Optional[MoveAssignment] = None
-    expected: ScheduleEntry
-    conflict_settings: MoveConflictSettings = Field(default_factory=MoveConflictSettings)
-    curriculum_hours: Dict[str, FiniteFloat] = Field(default_factory=dict)
-
-
-class MeetingMoveSnapshot(BaseModel):
-    before: List[ScheduleEntry]
-    after: List[ScheduleEntry]
-    conflict_settings: MoveConflictSettings = Field(default_factory=MoveConflictSettings)
-    original_conflicts: List[Tuple[int, int, str]] = Field(default_factory=list)
-    signature: str
-
-
-class MeetingMoveResult(BaseModel):
-    entries: List[ScheduleEntry]
-    snapshot: Optional[MeetingMoveSnapshot]
-    moved_entry_id: int
 
 
 class NamedEntity(BaseModel):
